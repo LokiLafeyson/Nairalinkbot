@@ -119,7 +119,8 @@ class PingHandler(BaseHTTPRequestHandler):
         pass
 
 def run_server():
-    server = HTTPServer(("0.0.0.0", 8080), PingHandler)
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), PingHandler)
     server.serve_forever()
 
 def keep_alive():
