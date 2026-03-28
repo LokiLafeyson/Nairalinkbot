@@ -14,9 +14,18 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 from solders.keypair import Keypair
+from solders.pubkey import Pubkey
+from solana.rpc.api import Client
+from solana.rpc.types import TokenAccountOpts
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Solana devnet client
+SOLANA_CLIENT = Client("https://api.devnet.solana.com")
+
+# USDC devnet mint address
+USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 
 # ---- CONVERSATION STATES ----
 SET_PIN = 1
@@ -58,7 +67,6 @@ def get_user(telegram_id):
     return user
 
 def create_user(telegram_id, first_name, pin):
-    # Generate Solana wallet
     keypair = Keypair()
     wallet_address = str(keypair.pubkey())
     wallet_private_key = str(keypair)
@@ -66,8 +74,8 @@ def create_user(telegram_id, first_name, pin):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
     cursor.execute(
-        """INSERT INTO users 
-        (telegram_id, first_name, pin_hash, wallet_address, wallet_private_key) 
+        """INSERT INTO users
+        (telegram_id, first_name, pin_hash, wallet_address, wallet_private_key)
         VALUES (?, ?, ?, ?, ?)""",
         (telegram_id, first_name, hash_pin(pin), wallet_address, wallet_private_key)
     )
@@ -129,6 +137,21 @@ def get_failed_attempts(telegram_id):
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else 0
+
+# ---- SOLANA BALANCE CHECK ----
+def get_usdc_balance(wallet_address):
+    try:
+        pubkey = Pubkey.from_string(wallet_address)
+        opts = TokenAccountOpts(mint=Pubkey.from_string(USDC_MINT))
+        response = SOLANA_CLIENT.get_token_accounts_by_owner(pubkey, opts)
+
+        if response.value:
+            amount = response.value[0].account.data.parsed[
+                "info"]["tokenAmount"]["uiAmount"]
+            return amount if amount else 0.0
+        return 0.0
+    except Exception:
+        return 0.0
 
 # ---- KEEP ALIVE SERVER ----
 class PingHandler(BaseHTTPRequestHandler):
@@ -354,12 +377,19 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     wallet_address = get_wallet_address(telegram_id)
+
+    await update.message.reply_text(
+        "⏳ Checking your balance on Solana..."
+    )
+
+    usdc_balance = get_usdc_balance(wallet_address)
+
     await update.message.reply_text(
         f"💰 Your NairaLink Balance\n\n"
-        f"USDC Balance: $0.00\n\n"
-        f"Fund your wallet:\n"
+        f"USDC Balance: ${usdc_balance:.2f}\n\n"
+        f"Wallet:\n"
         f"`{wallet_address}`\n\n"
-        f"Type /fund for funding instructions.",
+        f"Type /fund to add USDC to your wallet.",
         parse_mode="Markdown"
     )
 
@@ -397,7 +427,7 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Type /balance to check your balance.",
         parse_mode="Markdown"
     )
-    
+
 # ---- RESET (testing only) ----
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -412,8 +442,8 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🗑️ Your account has been reset.\n\n"
         "Type /start to create a new one."
-        )
-    
+    )
+
 # ---- MAIN ----
 def main():
     init_db()
@@ -459,5 +489,5 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()                          
+    main()
 
