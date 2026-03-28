@@ -446,17 +446,26 @@ async def airdrop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         pubkey = Pubkey.from_string(wallet_address)
         response = SOLANA_CLIENT.request_airdrop(pubkey, 2_000_000_000)
-        await update.message.reply_text(
-            f"✅ Airdrop successful!\n\n"
-            f"2 devnet SOL sent to your wallet.\n\n"
-            f"Transaction: {response.value}\n\n"
-            f"Type /balance to check your balance."
-        )
+        
+        if hasattr(response, 'value'):
+            await update.message.reply_text(
+                f"✅ Airdrop successful!\n\n"
+                f"2 devnet SOL sent to your wallet.\n\n"
+                f"Transaction: {response.value}\n\n"
+                f"Type /balance to check your balance."
+            )
+        else:
+            await update.message.reply_text(
+                f"✅ Airdrop requested!\n\n"
+                f"2 devnet SOL should arrive shortly.\n\n"
+                f"Check solscan.io with your wallet address\n"
+                f"to confirm it arrived."
+            )
     except Exception as e:
         await update.message.reply_text(
             f"❌ Airdrop failed: {str(e)}\n\n"
             f"Try again in a moment."
-              )
+    )
 
 # ---- RESET (testing only) ----
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
