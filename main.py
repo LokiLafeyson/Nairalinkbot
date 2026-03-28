@@ -22,7 +22,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # Solana devnet client
-SOLANA_CLIENT = Client("https://api.devnet.solana.com")
+SOLANA_CLIENT = Client("https://rpc.ankr.com/solana_devnet")
 
 # USDC devnet mint address
 USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
