@@ -1,3 +1,5 @@
 python-telegram-bot==22.7
 python-dotenv
 solders==0.21.0
+solana
+spl-token
