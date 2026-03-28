@@ -427,6 +427,36 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Type /balance to check your balance.",
         parse_mode="Markdown"
     )
+    
+# ---- /airdrop (testing only) ----
+async def airdrop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    wallet_address = get_wallet_address(telegram_id)
+
+    if not wallet_address:
+        await update.message.reply_text(
+            "⚠️ You need an account first.\n\nType /start to create one."
+        )
+        return
+
+    await update.message.reply_text(
+        "⏳ Requesting devnet SOL airdrop..."
+    )
+
+    try:
+        pubkey = Pubkey.from_string(wallet_address)
+        response = SOLANA_CLIENT.request_airdrop(pubkey, 2_000_000_000)
+        await update.message.reply_text(
+            f"✅ Airdrop successful!\n\n"
+            f"2 devnet SOL sent to your wallet.\n\n"
+            f"Transaction: {response.value}\n\n"
+            f"Type /balance to check your balance."
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Airdrop failed: {str(e)}\n\n"
+            f"Try again in a moment."
+              )
 
 # ---- RESET (testing only) ----
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -484,6 +514,7 @@ def main():
     app.add_handler(CommandHandler("fund", fund))
     app.add_handler(CommandHandler("wallet", wallet))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("airdrop", airdrop))
 
     print("NairaLink bot is running...")
     app.run_polling()
