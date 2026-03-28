@@ -22,7 +22,10 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # Solana devnet client
-SOLANA_CLIENT = Client("https://rpc.ankr.com/solana_devnet")
+SOLANA_CLIENT = Client(
+    "https://api.devnet.solana.com",
+    timeout=10
+)
 
 # USDC devnet mint address
 USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
@@ -444,23 +447,32 @@ async def airdrop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
+        import asyncio
         pubkey = Pubkey.from_string(wallet_address)
-        response = SOLANA_CLIENT.request_airdrop(pubkey, 2_000_000_000)
         
-        if hasattr(response, 'value'):
-            await update.message.reply_text(
-                f"✅ Airdrop successful!\n\n"
-                f"2 devnet SOL sent to your wallet.\n\n"
-                f"Transaction: {response.value}\n\n"
-                f"Type /balance to check your balance."
-            )
-        else:
-            await update.message.reply_text(
-                f"✅ Airdrop requested!\n\n"
-                f"2 devnet SOL should arrive shortly.\n\n"
-                f"Check solscan.io with your wallet address\n"
-                f"to confirm it arrived."
-            )
+        loop = asyncio.get_event_loop()
+        response = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: SOLANA_CLIENT.request_airdrop(
+                    pubkey, 2_000_000_000
+                )
+            ),
+            timeout=10.0
+        )
+
+        await update.message.reply_text(
+            f"✅ Airdrop requested!\n\n"
+            f"2 devnet SOL coming to your wallet.\n\n"
+            f"Check solscan.io to confirm arrival.\n\n"
+            f"Type /balance in 30 seconds."
+        )
+
+    except asyncio.TimeoutError:
+        await update.message.reply_text(
+            "⏱ Solana devnet is slow right now.\n\n"
+            "Try /airdrop again in 1 minute."
+        )
     except Exception as e:
         await update.message.reply_text(
             f"❌ Airdrop failed: {str(e)}\n\n"
