@@ -397,7 +397,23 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Type /balance to check your balance.",
         parse_mode="Markdown"
     )
-
+    
+# ---- RESET (testing only) ----
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(
+        "🗑️ Your account has been reset.\n\n"
+        "Type /start to create a new one."
+        )
+    
 # ---- MAIN ----
 def main():
     init_db()
@@ -437,6 +453,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("fund", fund))
     app.add_handler(CommandHandler("wallet", wallet))
+    app.add_handler(CommandHandler("reset", reset))
 
     print("NairaLink bot is running...")
     app.run_polling()
