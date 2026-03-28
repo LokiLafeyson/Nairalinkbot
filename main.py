@@ -1,4 +1,4 @@
-import os
+  import os
 import sqlite3
 import threading
 import hashlib
@@ -13,6 +13,7 @@ from telegram.ext import (
     ContextTypes
 )
 from dotenv import load_dotenv
+from solders.keypair import Keypair
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -32,6 +33,8 @@ def init_db():
             telegram_id INTEGER PRIMARY KEY,
             first_name TEXT,
             pin_hash TEXT,
+            wallet_address TEXT,
+            wallet_private_key TEXT,
             failed_attempts INTEGER DEFAULT 0,
             locked_until INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -55,14 +58,33 @@ def get_user(telegram_id):
     return user
 
 def create_user(telegram_id, first_name, pin):
+    # Generate Solana wallet
+    keypair = Keypair()
+    wallet_address = str(keypair.pubkey())
+    wallet_private_key = str(keypair)
+
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO users (telegram_id, first_name, pin_hash) VALUES (?, ?, ?)",
-        (telegram_id, first_name, hash_pin(pin))
+        """INSERT INTO users 
+        (telegram_id, first_name, pin_hash, wallet_address, wallet_private_key) 
+        VALUES (?, ?, ?, ?, ?)""",
+        (telegram_id, first_name, hash_pin(pin), wallet_address, wallet_private_key)
     )
     conn.commit()
     conn.close()
+    return wallet_address
+
+def get_wallet_address(telegram_id):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT wallet_address FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
 
 def verify_pin(telegram_id, pin):
     conn = sqlite3.connect("nairalink.db")
@@ -140,6 +162,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"What you can do:\n"
             f"💸 /send — Send money home\n"
             f"💰 /balance — Check your balance\n"
+            f"👛 /wallet — View your wallet address\n"
             f"📖 /help — How NairaLink works"
         )
         return ConversationHandler.END
@@ -186,18 +209,44 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     telegram_id = update.effective_user.id
     first_name = update.effective_user.first_name
-    create_user(telegram_id, first_name, pin)
+    wallet_address = create_user(telegram_id, first_name, pin)
 
     await update.message.reply_text(
         f"🎉 Account created successfully!\n\n"
         f"Welcome to NairaLink, {first_name}.\n\n"
+        f"Your Solana wallet has been created:\n"
+        f"`{wallet_address}`\n\n"
         f"What you can do:\n"
         f"💸 /send — Send money home\n"
         f"💰 /balance — Check your balance\n"
+        f"👛 /wallet — View your wallet address\n"
         f"📖 /help — How NairaLink works\n\n"
-        f"Your account is secured with your PIN."
+        f"Your account is secured with your PIN.",
+        parse_mode="Markdown"
     )
     return ConversationHandler.END
+
+# ---- /wallet ----
+async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    user = get_user(telegram_id)
+
+    if not user:
+        await update.message.reply_text(
+            "⚠️ You need an account first.\n\n"
+            "Type /start to create one."
+        )
+        return
+
+    wallet_address = get_wallet_address(telegram_id)
+    await update.message.reply_text(
+        f"👛 Your NairaLink Wallet\n\n"
+        f"Solana Address:\n"
+        f"`{wallet_address}`\n\n"
+        f"Send USDC to this address to fund your account.\n\n"
+        f"Type /balance to check your balance.",
+        parse_mode="Markdown"
+    )
 
 # ---- /send ----
 async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -304,10 +353,14 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    wallet_address = get_wallet_address(telegram_id)
     await update.message.reply_text(
-        "💰 Your NairaLink Balance\n\n"
-        "USDC Balance: $0.00\n\n"
-        "To fund your wallet, type /fund"
+        f"💰 Your NairaLink Balance\n\n"
+        f"USDC Balance: $0.00\n\n"
+        f"Fund your wallet:\n"
+        f"`{wallet_address}`\n\n"
+        f"Type /fund for funding instructions.",
+        parse_mode="Markdown"
     )
 
 # ---- /help ----
@@ -325,12 +378,24 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- /fund ----
 async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    wallet_address = get_wallet_address(telegram_id)
+
+    if not wallet_address:
+        await update.message.reply_text(
+            "⚠️ You need an account first.\n\n"
+            "Type /start to create one."
+        )
+        return
+
     await update.message.reply_text(
-        "💳 Fund Your Wallet\n\n"
-        "1️⃣ Buy USDC on Quidax or Yellow Card\n"
-        "2️⃣ Send it to your NairaLink wallet address\n"
-        "3️⃣ Your balance updates automatically\n\n"
-        "Type /balance to check your balance."
+        f"💳 Fund Your Wallet\n\n"
+        f"1️⃣ Buy USDC on Quidax or Yellow Card\n"
+        f"2️⃣ Send USDC to your NairaLink wallet:\n"
+        f"`{wallet_address}`\n"
+        f"3️⃣ Your balance updates automatically\n\n"
+        f"Type /balance to check your balance.",
+        parse_mode="Markdown"
     )
 
 # ---- MAIN ----
@@ -371,9 +436,11 @@ def main():
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("fund", fund))
+    app.add_handler(CommandHandler("wallet", wallet))
 
     print("NairaLink bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    main()                          
+
