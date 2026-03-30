@@ -2,6 +2,9 @@ import os
 import sqlite3
 import threading
 import hashlib
+import random
+import string
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import (
@@ -16,7 +19,6 @@ from dotenv import load_dotenv
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solana.rpc.api import Client
-from solana.rpc.types import TokenAccountOpts
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -29,6 +31,9 @@ SOLANA_CLIENT = Client(
 
 # USDC devnet mint address
 USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+
+# Naira to USDC rate (simulated)
+NAIRA_TO_USD = 1650
 
 # ---- CONVERSATION STATES ----
 SET_PIN = 1
@@ -49,6 +54,19 @@ def init_db():
             wallet_private_key TEXT,
             failed_attempts INTEGER DEFAULT 0,
             locked_until INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id INTEGER,
+            recipient_name TEXT,
+            naira_amount INTEGER,
+            usdc_amount REAL,
+            redemption_code TEXT,
+            transaction_id TEXT,
+            status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -145,9 +163,9 @@ def get_failed_attempts(telegram_id):
 def get_usdc_balance(wallet_address):
     try:
         pubkey = Pubkey.from_string(wallet_address)
+        from solana.rpc.types import TokenAccountOpts
         opts = TokenAccountOpts(mint=Pubkey.from_string(USDC_MINT))
         response = SOLANA_CLIENT.get_token_accounts_by_owner(pubkey, opts)
-
         if response.value:
             amount = response.value[0].account.data.parsed[
                 "info"]["tokenAmount"]["uiAmount"]
@@ -155,6 +173,54 @@ def get_usdc_balance(wallet_address):
         return 0.0
     except Exception:
         return 0.0
+
+# ---- GENERATE REDEMPTION CODE ----
+def generate_redemption_code():
+    letters = ''.join(random.choices(string.ascii_uppercase, k=4))
+    numbers = ''.join(random.choices(string.digits, k=4))
+    return f"NL-{letters}-{numbers}"
+
+# ---- GENERATE TRANSACTION ID ----
+def generate_transaction_id():
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(random.choices(chars, k=44))
+
+# ---- SAVE TRANSACTION ----
+def save_transaction(sender_id, recipient_name, naira_amount,
+                     usdc_amount, redemption_code, transaction_id):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO transactions
+        (sender_id, recipient_name, naira_amount, usdc_amount,
+        redemption_code, transaction_id, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'completed')""",
+        (sender_id, recipient_name, naira_amount, usdc_amount,
+         redemption_code, transaction_id)
+    )
+    conn.commit()
+    conn.close()
+
+def get_transaction_by_code(code):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM transactions WHERE redemption_code = ?",
+        (code.upper(),)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result
+
+def mark_redeemed(code):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE transactions SET status = 'redeemed' WHERE redemption_code = ?",
+        (code.upper(),)
+    )
+    conn.commit()
+    conn.close()
 
 # ---- KEEP ALIVE SERVER ----
 class PingHandler(BaseHTTPRequestHandler):
@@ -189,10 +255,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💸 /send — Send money home\n"
             f"💰 /balance — Check your balance\n"
             f"👛 /wallet — View your wallet address\n"
+            f"🧾 /redeem — Redeem a cash code\n"
             f"📖 /help — How NairaLink works"
         )
         return ConversationHandler.END
-
     else:
         await update.message.reply_text(
             f"👋 Welcome to NairaLink, {first_name}!\n\n"
@@ -245,8 +311,8 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"What you can do:\n"
         f"💸 /send — Send money home\n"
         f"💰 /balance — Check your balance\n"
-        f"👛 /wallet — View your wallet address\n"
-        f"📖 /help — How NairaLink works\n\n"
+        f"👛 /wallet — View your wallet\n"
+        f"🧾 /redeem — Redeem a cash code\n\n"
         f"Your account is secured with your PIN.",
         parse_mode="Markdown"
     )
@@ -259,8 +325,7 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not user:
         await update.message.reply_text(
-            "⚠️ You need an account first.\n\n"
-            "Type /start to create one."
+            "⚠️ You need an account first.\n\nType /start to create one."
         )
         return
 
@@ -281,8 +346,7 @@ async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not user:
         await update.message.reply_text(
-            "⚠️ You need an account first.\n\n"
-            "Type /start to create one."
+            "⚠️ You need an account first.\n\nType /start to create one."
         )
         return ConversationHandler.END
 
@@ -337,17 +401,40 @@ async def process_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(parts) >= 4 and parts[0] == "send" and parts[2] == "to":
         try:
-            amount = int(parts[1])
+            naira_amount = int(parts[1])
             recipient = " ".join(parts[3:]).title()
-            await update.message.reply_text(
-                f"✅ Transfer Initiated\n\n"
-                f"Amount: ₦{amount:,}\n"
-                f"Recipient: {recipient}\n"
-                f"Status: Processing on Solana...\n\n"
-                f"⏳ Recipient will receive a cash "
-                f"pickup code shortly.\n\n"
-                f"Transaction ID: TXN{amount}SOL001"
+
+            # Convert naira to USDC
+            usdc_amount = round(naira_amount / NAIRA_TO_USD, 2)
+
+            # Generate transaction details
+            redemption_code = generate_redemption_code()
+            transaction_id = generate_transaction_id()
+
+            # Save to database
+            sender_id = update.effective_user.id
+            save_transaction(
+                sender_id, recipient, naira_amount,
+                usdc_amount, redemption_code, transaction_id
             )
+
+            # Confirm to sender
+            await update.message.reply_text(
+                f"✅ Transfer Successful!\n\n"
+                f"Amount Sent: ₦{naira_amount:,}\n"
+                f"USDC Value: ${usdc_amount}\n"
+                f"Recipient: {recipient}\n"
+                f"Rate: ₦{NAIRA_TO_USD:,} / $1\n\n"
+                f"Transaction ID:\n"
+                f"`{transaction_id}`\n\n"
+                f"Cash Pickup Code for {recipient}:\n"
+                f"🔑 `{redemption_code}`\n\n"
+                f"Share this code with {recipient}.\n"
+                f"They can redeem it at any OPay or "
+                f"PalmPay agent near them.",
+                parse_mode="Markdown"
+            )
+
         except ValueError:
             await update.message.reply_text(
                 "⚠️ Could not read that amount.\n\n"
@@ -358,6 +445,51 @@ async def process_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ Please use this format:\n\nsend 50000 to Mum"
         )
 
+    return ConversationHandler.END
+
+# ---- /redeem ----
+async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🧾 Redeem Your Cash\n\n"
+        "Enter your redemption code:\n\n"
+        "Example: NL-ABCD-1234"
+    )
+    return VERIFY_PIN
+
+async def process_redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = update.message.text.strip().upper()
+    transaction = get_transaction_by_code(code)
+
+    if not transaction:
+        await update.message.reply_text(
+            "❌ Invalid code.\n\n"
+            "Please check the code and try again.\n\n"
+            "Type /redeem to try again."
+        )
+        return ConversationHandler.END
+
+    if transaction[8] == 'redeemed':
+        await update.message.reply_text(
+            "⚠️ This code has already been redeemed.\n\n"
+            "Contact support if you think this is an error."
+        )
+        return ConversationHandler.END
+
+    # Mark as redeemed
+    mark_redeemed(code)
+
+    naira_amount = transaction[3]
+    recipient_name = transaction[2]
+
+    await update.message.reply_text(
+        f"✅ Code Redeemed Successfully!\n\n"
+        f"Recipient: {recipient_name}\n"
+        f"Amount: ₦{naira_amount:,}\n\n"
+        f"Please visit your nearest OPay or PalmPay "
+        f"agent to collect your cash.\n\n"
+        f"Show them this confirmation message.\n\n"
+        f"Thank you for using NairaLink! 🇳🇬"
+    )
     return ConversationHandler.END
 
 # ---- CANCEL ----
@@ -374,24 +506,18 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not user:
         await update.message.reply_text(
-            "⚠️ You need an account first.\n\n"
-            "Type /start to create one."
+            "⚠️ You need an account first.\n\nType /start to create one."
         )
         return
 
     wallet_address = get_wallet_address(telegram_id)
-
-    await update.message.reply_text(
-        "⏳ Checking your balance on Solana..."
-    )
-
+    await update.message.reply_text("⏳ Checking your balance on Solana...")
     usdc_balance = get_usdc_balance(wallet_address)
 
     await update.message.reply_text(
         f"💰 Your NairaLink Balance\n\n"
         f"USDC Balance: ${usdc_balance:.2f}\n\n"
-        f"Wallet:\n"
-        f"`{wallet_address}`\n\n"
+        f"Wallet:\n`{wallet_address}`\n\n"
         f"Type /fund to add USDC to your wallet.",
         parse_mode="Markdown"
     )
@@ -416,8 +542,7 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not wallet_address:
         await update.message.reply_text(
-            "⚠️ You need an account first.\n\n"
-            "Type /start to create one."
+            "⚠️ You need an account first.\n\nType /start to create one."
         )
         return
 
@@ -429,54 +554,6 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"3️⃣ Your balance updates automatically\n\n"
         f"Type /balance to check your balance.",
         parse_mode="Markdown"
-    )
-    
-# ---- /airdrop (testing only) ----
-async def airdrop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    telegram_id = update.effective_user.id
-    wallet_address = get_wallet_address(telegram_id)
-
-    if not wallet_address:
-        await update.message.reply_text(
-            "⚠️ You need an account first.\n\nType /start to create one."
-        )
-        return
-
-    await update.message.reply_text(
-        "⏳ Requesting devnet SOL airdrop..."
-    )
-
-    try:
-        import asyncio
-        pubkey = Pubkey.from_string(wallet_address)
-        
-        loop = asyncio.get_event_loop()
-        response = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                lambda: SOLANA_CLIENT.request_airdrop(
-                    pubkey, 2_000_000_000
-                )
-            ),
-            timeout=10.0
-        )
-
-        await update.message.reply_text(
-            f"✅ Airdrop requested!\n\n"
-            f"2 devnet SOL coming to your wallet.\n\n"
-            f"Check solscan.io to confirm arrival.\n\n"
-            f"Type /balance in 30 seconds."
-        )
-
-    except asyncio.TimeoutError:
-        await update.message.reply_text(
-            "⏱ Solana devnet is slow right now.\n\n"
-            "Try /airdrop again in 1 minute."
-        )
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Airdrop failed: {str(e)}\n\n"
-            f"Try again in a moment."
     )
 
 # ---- RESET (testing only) ----
@@ -491,8 +568,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     await update.message.reply_text(
-        "🗑️ Your account has been reset.\n\n"
-        "Type /start to create a new one."
+        "🗑️ Your account has been reset.\n\nType /start to create a new one."
     )
 
 # ---- MAIN ----
@@ -528,14 +604,24 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
+    redeem_handler = ConversationHandler(
+        entry_points=[CommandHandler("redeem", redeem)],
+        states={
+            VERIFY_PIN: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, process_redeem
+            )],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
     app.add_handler(registration_handler)
     app.add_handler(send_handler)
+    app.add_handler(redeem_handler)
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("fund", fund))
     app.add_handler(CommandHandler("wallet", wallet))
     app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(CommandHandler("airdrop", airdrop))
 
     print("NairaLink bot is running...")
     app.run_polling()
