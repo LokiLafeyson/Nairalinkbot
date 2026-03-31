@@ -565,26 +565,3 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💡 Fees under 1 percent. Arrives in seconds."
     )
 
-# ---- /fund ----
-async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    telegram_id = update.effective_user.id
-    wallet_address = get_wallet_address(telegram_id)
-    if not wallet_address:
-        await update.message.reply_text(
-            "⚠️ You need an account first.\n\nType /start to create one."
-        )
-        return
-    await update.message.reply_text(
-        f"💳 Fund Your Wallet\n\n"
-        f"1️⃣ Buy USDC on Quidax or Yellow Card\n"
-        f"2️⃣ Send USDC to your NairaLink wallet:\n"
-        f"`{wallet_address}`\n"
-        f"3️⃣ Your balance updates automatically\n\n"
-        f"Type /balance to check your balance.",
-        parse_mode="Markdown"
-    )
-
-# ---- RESET (testing only) ----
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    telegram_id = update.effective_user.id
-    conn = sqlite3.conn
