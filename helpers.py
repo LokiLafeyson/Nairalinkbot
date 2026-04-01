@@ -243,3 +243,65 @@ def simulate_paystack_transfer(
         "bank_name": bank_name.title(),
         "message": "Transfer initiated successfully"
         }
+def get_exchange_rate(currency="GBP"):
+    import requests
+    import os
+    try:
+        api_key = os.getenv("EXCHANGE_RATE_API_KEY")
+        response = requests.get(
+            f"https://v6.exchangerate-api.com/v6/{api_key}/latest/{currency}"
+        )
+        data = response.json()
+        if data["result"] == "success":
+            ngn_rate = data["conversion_rates"]["NGN"]
+            usd_rate = data["conversion_rates"]["USD"]
+            return {
+                "ngn_per_foreign": ngn_rate,
+                "foreign_per_usdc": usd_rate,
+                "ngn_per_usdc": ngn_rate / usd_rate,
+                "currency": currency
+            }
+    except Exception:
+        pass
+    return {
+        "ngn_per_foreign": 1950,
+        "foreign_per_usdc": 1.0,
+        "ngn_per_usdc": 1650,
+        "currency": currency
+    }
+
+def generate_transak_link(
+        api_key, amount, currency, wallet_address):
+    import urllib.parse
+    base_url = "https://global-stg.transak.com"
+    params = {
+        "apiKey": api_key,
+        "cryptoCurrencyCode": "USDC",
+        "network": "solana",
+        "walletAddress": wallet_address,
+        "fiatCurrency": currency,
+        "fiatAmount": str(amount),
+        "disableWalletAddressForm": "true",
+        "hideMenu": "true",
+        "themeColor": "00A651",
+    }
+    query = urllib.parse.urlencode(params)
+    return f"{base_url}?{query}"
+
+def calculate_send_cost(naira_amount, currency="GBP"):
+    rates = get_exchange_rate(currency)
+    ngn_per_foreign = rates["ngn_per_foreign"]
+    foreign_amount = round(naira_amount / ngn_per_foreign, 2)
+    usdc_amount = round(naira_amount / rates["ngn_per_usdc"], 2)
+    fee_foreign = round(foreign_amount * 0.008, 2)
+    total_foreign = round(foreign_amount + fee_foreign, 2)
+    return {
+        "naira_amount": naira_amount,
+        "foreign_amount": foreign_amount,
+        "fee_foreign": fee_foreign,
+        "total_foreign": total_foreign,
+        "usdc_amount": usdc_amount,
+        "currency": currency,
+        "rate": ngn_per_foreign
+    }
+    
