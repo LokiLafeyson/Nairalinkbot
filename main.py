@@ -1,6 +1,5 @@
 import os
 import threading
-import traceback
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
@@ -16,9 +15,9 @@ from dotenv import load_dotenv
 from helpers import (
     init_db, get_user, create_user, get_wallet_address,
     verify_pin, increment_failed_attempts, reset_failed_attempts,
-    get_failed_attempts, save_transaction, get_transaction_by_code,
-    mark_redeemed, get_usdc_balance, generate_redemption_code,
-    generate_transaction_id, NAIRA_TO_USD
+    get_failed_attempts, save_transaction, get_usdc_balance,
+    generate_transaction_id, NAIRA_TO_USD,
+    simulate_paystack_transfer, get_bank_code
 )
 
 load_dotenv()
@@ -32,7 +31,6 @@ SEND_RECIPIENT = 5
 SEND_BANK = 6
 SEND_ACCOUNT = 7
 SEND_CONFIRM = 8
-REDEEM_CODE = 9
 
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -62,7 +60,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💸 /send — Send money home\n"
             f"💰 /balance — Check your balance\n"
             f"👛 /wallet — View your wallet\n"
-            f"🧾 /redeem — Redeem a cash code\n"
             f"📖 /help — How NairaLink works"
         )
         return ConversationHandler.END
@@ -70,7 +67,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"👋 Welcome to NairaLink, {first_name}!\n\n"
             f"Send money home instantly — your family receives "
-            f"naira cash, no bank account needed.\n\n"
+            f"naira directly in their bank account.\n\n"
             f"🔐 Please set a 4-digit PIN:"
         )
         return SET_PIN
@@ -79,7 +76,8 @@ async def set_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pin = update.message.text.strip()
     if not pin.isdigit() or len(pin) != 4:
         await update.message.reply_text(
-            "⚠️ PIN must be exactly 4 digits.\n\nPlease enter a 4-digit PIN:"
+            "⚠️ PIN must be exactly 4 digits.\n\n"
+            "Please enter a 4-digit PIN:"
         )
         return SET_PIN
     context.user_data["temp_pin"] = pin
@@ -106,7 +104,7 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💸 /send — Send money home\n"
         f"💰 /balance — Check balance\n"
         f"👛 /wallet — View wallet\n"
-        f"🧾 /redeem — Redeem cash code",
+        f"📖 /help — How it works",
         parse_mode="Markdown"
     )
     return ConversationHandler.END
@@ -114,7 +112,9 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
-        await update.message.reply_text("⚠️ Type /start to create an account.")
+        await update.message.reply_text(
+            "⚠️ Type /start to create an account."
+        )
         return
     wallet_address = get_wallet_address(telegram_id)
     await update.message.reply_text(
@@ -126,28 +126,41 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
-        await update.message.reply_text("⚠️ Type /start to create an account.")
+        await update.message.reply_text(
+            "⚠️ Type /start to create an account."
+        )
         return ConversationHandler.END
     if get_failed_attempts(telegram_id) >= 3:
-        await update.message.reply_text("🔒 Account locked. Contact support.")
+        await update.message.reply_text(
+            "🔒 Account locked. Contact support."
+        )
         return ConversationHandler.END
-    await update.message.reply_text("🔐 Enter your PIN to continue:")
+    await update.message.reply_text(
+        "🔐 Enter your PIN to continue:"
+    )
     return VERIFY_PIN
 
-async def verify_pin_for_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def verify_pin_for_send(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     pin = update.message.text.strip()
     if not verify_pin(telegram_id, pin):
         increment_failed_attempts(telegram_id)
         remaining = 3 - get_failed_attempts(telegram_id)
         if remaining <= 0:
-            await update.message.reply_text("🔒 Account locked. Contact support.")
+            await update.message.reply_text(
+                "🔒 Account locked. Contact support."
+            )
         else:
-            await update.message.reply_text(f"❌ Wrong PIN. {remaining} attempt(s) left.")
+            await update.message.reply_text(
+                f"❌ Wrong PIN. {remaining} attempt(s) left."
+            )
         return ConversationHandler.END
     reset_failed_attempts(telegram_id)
     await update.message.reply_text(
-        "✅ PIN verified.\n\n💸 How much do you want to send?\n\nExample: 50000"
+        "✅ PIN verified.\n\n"
+        "💸 How much do you want to send?\n\n"
+        "Type amount in naira:\nExample: 50000"
     )
     return SEND_AMOUNT
 
@@ -155,12 +168,15 @@ async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount_text = update.message.text.strip()
     if not amount_text.isdigit() or int(amount_text) < 500:
         await update.message.reply_text(
-            "⚠️ Enter a valid amount (minimum ₦500):\nExample: 50000"
+            "⚠️ Enter a valid amount (minimum ₦500):\n"
+            "Example: 50000"
         )
         return SEND_AMOUNT
     context.user_data["naira_amount"] = int(amount_text)
     await update.message.reply_text(
-        f"💵 Amount: ₦{int(amount_text):,}\n\nWho are you sending to?\nExample: Mum"
+        f"💵 Amount: ₦{int(amount_text):,}\n\n"
+        f"👤 Who are you sending to?\n\n"
+        f"Type recipient's name:\nExample: Mum"
     )
     return SEND_RECIPIENT
 
@@ -168,15 +184,27 @@ async def get_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recipient = update.message.text.strip().title()
     context.user_data["recipient_name"] = recipient
     await update.message.reply_text(
-        f"👤 Recipient: {recipient}\n\n🏦 What is their bank name?\nExample: Access Bank"
+        f"👤 Recipient: {recipient}\n\n"
+        f"🏦 What is their bank name?\n\n"
+        f"Example: Access Bank, GTBank, Opay, Kuda"
     )
     return SEND_BANK
 
 async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bank = update.message.text.strip().title()
-    context.user_data["recipient_bank"] = bank
+    bank = update.message.text.strip()
+    bank_code = get_bank_code(bank)
+    if bank_code == "000":
+        await update.message.reply_text(
+            f"⚠️ Bank not recognized.\n\n"
+            f"Please enter a valid Nigerian bank name:\n"
+            f"Examples: Access Bank, GTBank, Zenith Bank, "
+            f"First Bank, UBA, Opay, Kuda, PalmPay"
+        )
+        return SEND_BANK
+    context.user_data["recipient_bank"] = bank.title()
     await update.message.reply_text(
-        f"🏦 Bank: {bank}\n\n🔢 Enter their 10-digit account number:"
+        f"🏦 Bank: {bank.title()}\n\n"
+        f"🔢 Enter their 10-digit account number:"
     )
     return SEND_ACCOUNT
 
@@ -184,7 +212,8 @@ async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     account = update.message.text.strip()
     if not account.isdigit() or len(account) != 10:
         await update.message.reply_text(
-            "⚠️ Must be exactly 10 digits.\n\nEnter account number again:"
+            "⚠️ Must be exactly 10 digits.\n\n"
+            "Enter account number again:"
         )
         return SEND_ACCOUNT
     context.user_data["recipient_account"] = account
@@ -192,14 +221,19 @@ async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recipient = context.user_data["recipient_name"]
     bank = context.user_data["recipient_bank"]
     usdc_amount = round(naira_amount / NAIRA_TO_USD, 2)
+    fee = round(naira_amount * 0.008)
+    total = naira_amount + fee
     await update.message.reply_text(
         f"📋 Confirm your transfer:\n\n"
-        f"Amount: ₦{naira_amount:,}\n"
-        f"USDC Value: ${usdc_amount}\n"
         f"Recipient: {recipient}\n"
         f"Bank: {bank}\n"
-        f"Account: {account}\n"
+        f"Account: {account}\n\n"
+        f"Amount: ₦{naira_amount:,}\n"
+        f"Fee: ₦{fee:,}\n"
+        f"Total: ₦{total:,}\n"
+        f"USDC Value: ${usdc_amount}\n"
         f"Rate: ₦{NAIRA_TO_USD:,} / $1\n\n"
+        f"Money goes directly to their bank account.\n\n"
         f"Type YES to confirm or NO to cancel:"
     )
     return SEND_CONFIRM
@@ -207,75 +241,78 @@ async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = update.message.text.strip().upper()
     if response == "NO":
-        await update.message.reply_text("❌ Cancelled. Type /send to start again.")
+        await update.message.reply_text(
+            "❌ Cancelled. Type /send to start again."
+        )
         return ConversationHandler.END
     if response != "YES":
-        await update.message.reply_text("Type YES to confirm or NO to cancel:")
+        await update.message.reply_text(
+            "Type YES to confirm or NO to cancel:"
+        )
         return SEND_CONFIRM
+
     naira_amount = context.user_data["naira_amount"]
     recipient = context.user_data["recipient_name"]
     bank = context.user_data["recipient_bank"]
     account = context.user_data["recipient_account"]
     usdc_amount = round(naira_amount / NAIRA_TO_USD, 2)
-    redemption_code = generate_redemption_code()
     transaction_id = generate_transaction_id()
-    save_transaction(
-        update.effective_user.id, recipient, bank, account,
-        naira_amount, usdc_amount, redemption_code, transaction_id
-    )
-    await update.message.reply_text(
-        f"✅ Transfer Successful!\n\n"
-        f"Amount: ₦{naira_amount:,}\n"
-        f"USDC: ${usdc_amount}\n"
-        f"Recipient: {recipient}\n"
-        f"Bank: {bank}\n"
-        f"Account: {account}\n\n"
-        f"Transaction ID:\n`{transaction_id}`\n\n"
-        f"Cash Pickup Code:\n🔑 `{redemption_code}`\n\n"
-        f"Share this code with {recipient}.\n"
-        f"They redeem it at any OPay or PalmPay agent.",
-        parse_mode="Markdown"
-    )
-    return ConversationHandler.END
+    sender_id = update.effective_user.id
 
-async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🧾 Enter your redemption code:\n\nExample: NL-ABCD-1234"
+        "⏳ Processing your transfer via Paystack...\n\n"
+        "Please wait a moment."
     )
-    return REDEEM_CODE
 
-async def process_redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = update.message.text.strip().upper()
-    transaction = get_transaction_by_code(code)
-    if not transaction:
-        await update.message.reply_text("❌ Invalid code. Type /redeem to try again.")
-        return ConversationHandler.END
-    if transaction[9] == 'redeemed':
-        await update.message.reply_text("⚠️ This code has already been redeemed.")
-        return ConversationHandler.END
-    mark_redeemed(code)
-    await update.message.reply_text(
-        f"✅ Code Redeemed!\n\n"
-        f"Recipient: {transaction[2]}\n"
-        f"Amount: ₦{transaction[5]:,}\n"
-        f"Bank: {transaction[3]}\n"
-        f"Account: {transaction[4]}\n\n"
-        f"Visit any OPay or PalmPay agent to collect cash.\n\n"
-        f"Thank you for using NairaLink! 🇳🇬"
+    result = simulate_paystack_transfer(
+        recipient, bank, account, naira_amount
     )
+
+    if result["status"] == "success":
+        save_transaction(
+            sender_id, recipient, bank, account,
+            naira_amount, usdc_amount,
+            result["reference"], transaction_id
+        )
+        await update.message.reply_text(
+            f"✅ Transfer Successful!\n\n"
+            f"₦{naira_amount:,} sent directly to:\n\n"
+            f"Recipient: {recipient}\n"
+            f"Bank: {bank}\n"
+            f"Account: {account}\n\n"
+            f"Paystack Reference:\n"
+            f"`{result['reference']}`\n\n"
+            f"Transaction ID:\n"
+            f"`{transaction_id}`\n\n"
+            f"💡 {recipient} will receive an alert "
+            f"from their bank shortly.\n\n"
+            f"Powered by Paystack + Solana",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Transfer failed. Please try again.\n\n"
+            "Type /send to start again."
+        )
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Cancelled. Type /start to begin again.")
+    await update.message.reply_text(
+        "❌ Cancelled. Type /start to begin again."
+    )
     return ConversationHandler.END
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
-        await update.message.reply_text("⚠️ Type /start to create an account.")
+        await update.message.reply_text(
+            "⚠️ Type /start to create an account."
+        )
         return
     wallet_address = get_wallet_address(telegram_id)
-    await update.message.reply_text("⏳ Checking your balance on Solana...")
+    await update.message.reply_text(
+        "⏳ Checking your balance on Solana..."
+    )
     usdc_balance = get_usdc_balance(wallet_address)
     await update.message.reply_text(
         f"💰 USDC Balance: ${usdc_balance:.2f}\n\n"
@@ -289,19 +326,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 How NairaLink Works\n\n"
         "1️⃣ Create account with /start\n"
         "2️⃣ Fund wallet with USDC\n"
-        "3️⃣ Type /send and follow steps\n"
-        "4️⃣ Enter recipient name, bank, account\n"
-        "5️⃣ Confirm with PIN\n"
-        "6️⃣ Recipient gets cash pickup code\n"
-        "7️⃣ Redeem at OPay or PalmPay agent\n\n"
-        "💡 Fees under 1 percent. Arrives in seconds."
+        "3️⃣ Type /send and follow the steps\n"
+        "4️⃣ Enter recipient name, bank and account\n"
+        "5️⃣ Confirm with your PIN\n"
+        "6️⃣ Money goes directly to their bank account\n\n"
+        "💡 Powered by Paystack + Solana\n"
+        "Fees under 1 percent. Arrives in seconds."
     )
 
 async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     wallet_address = get_wallet_address(telegram_id)
     if not wallet_address:
-        await update.message.reply_text("⚠️ Type /start to create an account.")
+        await update.message.reply_text(
+            "⚠️ Type /start to create an account."
+        )
         return
     await update.message.reply_text(
         f"💳 Fund Your Wallet\n\n"
@@ -317,10 +356,15 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import sqlite3
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute(
+        "DELETE FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
     conn.commit()
     conn.close()
-    await update.message.reply_text("🗑️ Account reset. Type /start to create a new one.")
+    await update.message.reply_text(
+        "🗑️ Account reset. Type /start to create a new one."
+    )
 
 def main():
     init_db()
@@ -330,8 +374,12 @@ def main():
     registration_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            SET_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_pin)],
-            CONFIRM_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_pin)],
+            SET_PIN: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, set_pin
+            )],
+            CONFIRM_PIN: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, confirm_pin
+            )],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
@@ -339,27 +387,30 @@ def main():
     send_handler = ConversationHandler(
         entry_points=[CommandHandler("send", send)],
         states={
-            VERIFY_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_pin_for_send)],
-            SEND_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_amount)],
-            SEND_RECIPIENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_recipient)],
-            SEND_BANK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bank)],
-            SEND_ACCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account)],
-            SEND_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_send)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-
-    redeem_handler = ConversationHandler(
-        entry_points=[CommandHandler("redeem", redeem)],
-        states={
-            REDEEM_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_redeem)],
+            VERIFY_PIN: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, verify_pin_for_send
+            )],
+            SEND_AMOUNT: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, get_amount
+            )],
+            SEND_RECIPIENT: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, get_recipient
+            )],
+            SEND_BANK: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, get_bank
+            )],
+            SEND_ACCOUNT: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, get_account
+            )],
+            SEND_CONFIRM: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, confirm_send
+            )],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
     app.add_handler(registration_handler)
     app.add_handler(send_handler)
-    app.add_handler(redeem_handler)
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("fund", fund))
@@ -376,5 +427,3 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
-                            
-                
