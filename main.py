@@ -17,7 +17,8 @@ from helpers import (
     verify_pin, increment_failed_attempts, reset_failed_attempts,
     get_failed_attempts, save_transaction, get_usdc_balance,
     generate_transaction_id, NAIRA_TO_USD,
-    simulate_paystack_transfer, get_bank_code
+    simulate_paystack_transfer, get_bank_code,
+    generate_transak_link, calculate_send_cost, get_exchange_rate
 )
 
 load_dotenv()
@@ -31,6 +32,8 @@ SEND_RECIPIENT = 5
 SEND_BANK = 6
 SEND_ACCOUNT = 7
 SEND_CONFIRM = 8
+TOPUP_CURRENCY = 10
+TOPUP_AMOUNT = 11
 
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -57,6 +60,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user:
         await update.message.reply_text(
             f"👋 Welcome back, {first_name}!\n\n"
+            f"💱 /topup — Fund wallet with GBP/USD/EUR\n"
             f"💸 /send — Send money home\n"
             f"💰 /balance — Check your balance\n"
             f"👛 /wallet — View your wallet\n"
@@ -101,10 +105,10 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎉 Account created!\n\n"
         f"Welcome to NairaLink, {first_name}.\n\n"
         f"Your Solana wallet:\n`{wallet_address}`\n\n"
+        f"💱 /topup — Fund wallet\n"
         f"💸 /send — Send money home\n"
         f"💰 /balance — Check balance\n"
-        f"👛 /wallet — View wallet\n"
-        f"📖 /help — How it works",
+        f"👛 /wallet — View wallet",
         parse_mode="Markdown"
     )
     return ConversationHandler.END
@@ -122,6 +126,92 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Send USDC here to fund your account.",
         parse_mode="Markdown"
     )
+
+async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    if not get_user(telegram_id):
+        await update.message.reply_text(
+            "⚠️ Type /start to create an account first."
+        )
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "💱 Top Up Your NairaLink Wallet\n\n"
+        "What currency are you sending from?\n\n"
+        "Type one of these:\n"
+        "🇬🇧 GBP — British Pounds\n"
+        "🇺🇸 USD — US Dollars\n"
+        "🇪🇺 EUR — Euros\n"
+        "🇨🇦 CAD — Canadian Dollars"
+    )
+    return TOPUP_CURRENCY
+
+async def topup_currency(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
+    currency = update.message.text.strip().upper()
+    supported = ["GBP", "USD", "EUR", "CAD"]
+    if currency not in supported:
+        await update.message.reply_text(
+            "⚠️ Please type one of these:\n"
+            "GBP, USD, EUR, or CAD"
+        )
+        return TOPUP_CURRENCY
+    context.user_data["topup_currency"] = currency
+    currency_symbols = {
+        "GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"
+    }
+    symbol = currency_symbols[currency]
+    await update.message.reply_text(
+        f"💱 Currency: {currency}\n\n"
+        f"How much {currency} do you want to convert?\n\n"
+        f"Type the amount:\nExample: 50"
+    )
+    return TOPUP_AMOUNT
+
+async def topup_amount(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
+    amount_text = update.message.text.strip()
+    if not amount_text.replace(".", "").isdigit():
+        await update.message.reply_text(
+            "⚠️ Please enter a valid amount:\nExample: 50"
+        )
+        return TOPUP_AMOUNT
+    amount = float(amount_text)
+    if amount < 5:
+        await update.message.reply_text(
+            "⚠️ Minimum amount is 5.\n\nPlease enter a higher amount:"
+        )
+        return TOPUP_AMOUNT
+    currency = context.user_data["topup_currency"]
+    telegram_id = update.effective_user.id
+    wallet_address = get_wallet_address(telegram_id)
+    await update.message.reply_text(
+        "⏳ Getting live exchange rate..."
+    )
+    naira_equivalent = int(amount * 1650)
+    costs = calculate_send_cost(naira_equivalent, currency)
+    currency_symbols = {
+        "GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"
+    }
+    symbol = currency_symbols[currency]
+    transak_key = os.getenv("TRANSAK_API_KEY", "demo")
+    payment_link = generate_transak_link(
+        transak_key, amount, currency, wallet_address
+    )
+    await update.message.reply_text(
+        f"💱 Live Exchange Rate\n\n"
+        f"You send: {symbol}{amount} {currency}\n"
+        f"Fee: {symbol}{costs['fee_foreign']} (0.8%)\n"
+        f"Total: {symbol}{costs['total_foreign']} {currency}\n\n"
+        f"Recipient gets: ₦{costs['naira_amount']:,}\n"
+        f"USDC Value: ${costs['usdc_amount']}\n"
+        f"Rate: {symbol}1 = ₦{costs['rate']:,.0f}\n\n"
+        f"💳 Complete payment here:\n"
+        f"{payment_link}\n\n"
+        f"After payment your wallet will be funded "
+        f"with USDC automatically.\n\n"
+        f"Then type /send to transfer to Nigeria."
+    )
+    return ConversationHandler.END
 
 async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -180,7 +270,8 @@ async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SEND_RECIPIENT
 
-async def get_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_recipient(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
     recipient = update.message.text.strip().title()
     context.user_data["recipient_name"] = recipient
     await update.message.reply_text(
@@ -196,8 +287,8 @@ async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bank_code == "000":
         await update.message.reply_text(
             f"⚠️ Bank not recognized.\n\n"
-            f"Please enter a valid Nigerian bank name:\n"
-            f"Examples: Access Bank, GTBank, Zenith Bank, "
+            f"Please enter a valid Nigerian bank:\n"
+            f"Access Bank, GTBank, Zenith Bank, "
             f"First Bank, UBA, Opay, Kuda, PalmPay"
         )
         return SEND_BANK
@@ -208,7 +299,8 @@ async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SEND_ACCOUNT
 
-async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_account(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
     account = update.message.text.strip()
     if not account.isdigit() or len(account) != 10:
         await update.message.reply_text(
@@ -231,14 +323,14 @@ async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Amount: ₦{naira_amount:,}\n"
         f"Fee: ₦{fee:,}\n"
         f"Total: ₦{total:,}\n"
-        f"USDC Value: ${usdc_amount}\n"
-        f"Rate: ₦{NAIRA_TO_USD:,} / $1\n\n"
+        f"USDC Value: ${usdc_amount}\n\n"
         f"Money goes directly to their bank account.\n\n"
         f"Type YES to confirm or NO to cancel:"
     )
     return SEND_CONFIRM
 
-async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def confirm_send(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = update.message.text.strip().upper()
     if response == "NO":
         await update.message.reply_text(
@@ -250,7 +342,6 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Type YES to confirm or NO to cancel:"
         )
         return SEND_CONFIRM
-
     naira_amount = context.user_data["naira_amount"]
     recipient = context.user_data["recipient_name"]
     bank = context.user_data["recipient_bank"]
@@ -258,16 +349,13 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usdc_amount = round(naira_amount / NAIRA_TO_USD, 2)
     transaction_id = generate_transaction_id()
     sender_id = update.effective_user.id
-
     await update.message.reply_text(
         "⏳ Processing your transfer via Paystack...\n\n"
         "Please wait a moment."
     )
-
     result = simulate_paystack_transfer(
         recipient, bank, account, naira_amount
     )
-
     if result["status"] == "success":
         save_transaction(
             sender_id, recipient, bank, account,
@@ -284,8 +372,8 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"`{result['reference']}`\n\n"
             f"Transaction ID:\n"
             f"`{transaction_id}`\n\n"
-            f"💡 {recipient} will receive an alert "
-            f"from their bank shortly.\n\n"
+            f"💡 {recipient} will receive a bank "
+            f"alert shortly.\n\n"
             f"Powered by Paystack + Solana",
             parse_mode="Markdown"
         )
@@ -317,20 +405,21 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"💰 USDC Balance: ${usdc_balance:.2f}\n\n"
         f"Wallet:\n`{wallet_address}`\n\n"
-        f"Type /fund to add USDC.",
+        f"Type /topup to add funds.",
         parse_mode="Markdown"
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 How NairaLink Works\n\n"
         "1️⃣ Create account with /start\n"
-        "2️⃣ Fund wallet with USDC\n"
-        "3️⃣ Type /send and follow the steps\n"
-        "4️⃣ Enter recipient name, bank and account\n"
-        "5️⃣ Confirm with your PIN\n"
-        "6️⃣ Money goes directly to their bank account\n\n"
-        "💡 Powered by Paystack + Solana\n"
+        "2️⃣ Type /topup to fund with GBP/USD/EUR\n"
+        "3️⃣ Pay with your card via Transak\n"
+        "4️⃣ USDC lands in your Solana wallet\n"
+        "5️⃣ Type /send — enter recipient details\n"
+        "6️⃣ Money goes directly to their bank\n\n"
+        "💡 Powered by Transak + Solana + Paystack\n"
         "Fees under 1 percent. Arrives in seconds."
     )
 
@@ -344,10 +433,9 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         f"💳 Fund Your Wallet\n\n"
-        f"1️⃣ Buy USDC on Quidax or Yellow Card\n"
-        f"2️⃣ Send USDC to:\n`{wallet_address}`\n"
-        f"3️⃣ Balance updates automatically\n\n"
-        f"Type /balance to check.",
+        f"Type /topup to fund with GBP, USD or EUR\n\n"
+        f"Or send USDC directly to:\n`{wallet_address}`\n\n"
+        f"Type /balance to check your balance.",
         parse_mode="Markdown"
     )
 
@@ -409,8 +497,22 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
+    topup_handler = ConversationHandler(
+        entry_points=[CommandHandler("topup", topup)],
+        states={
+            TOPUP_CURRENCY: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, topup_currency
+            )],
+            TOPUP_AMOUNT: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND, topup_amount
+            )],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
     app.add_handler(registration_handler)
     app.add_handler(send_handler)
+    app.add_handler(topup_handler)
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("fund", fund))
@@ -426,4 +528,4 @@ if __name__ == "__main__":
     except Exception:
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        sys.exit(1)                                         
