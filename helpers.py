@@ -191,3 +191,55 @@ def get_usdc_balance(wallet_address):
         return 0.0
     except Exception:
         return 0.0
+def get_bank_code(bank_name):
+    bank_codes = {
+        "access bank": "044",
+        "gtbank": "058",
+        "gtb": "058",
+        "guaranty trust bank": "058",
+        "zenith bank": "057",
+        "first bank": "011",
+        "uba": "033",
+        "united bank for africa": "033",
+        "fidelity bank": "070",
+        "union bank": "032",
+        "sterling bank": "232",
+        "keystone bank": "082",
+        "polaris bank": "076",
+        "stanbic ibtc": "039",
+        "standard chartered": "068",
+        "ecobank": "050",
+        "heritage bank": "030",
+        "providus bank": "101",
+        "wema bank": "035",
+        "opay": "999992",
+        "palmpay": "999991",
+        "kuda": "090267",
+        "moniepoint": "090405",
+        "carbon": "090175",
+        "vfd": "090110",
+    }
+    return bank_codes.get(bank_name.lower().strip(), "000")
+
+def simulate_paystack_transfer(
+        recipient_name, bank_name, account_number, amount_naira):
+    import time
+    import random
+
+    bank_code = get_bank_code(bank_name)
+    reference = f"NL-PAY-{''.join(random.choices('0123456789ABCDEF', k=12))}"
+    transfer_code = f"TRF_{''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))}"
+
+    time.sleep(1.5)
+
+    return {
+        "status": "success",
+        "reference": reference,
+        "transfer_code": transfer_code,
+        "bank_code": bank_code,
+        "account_number": account_number,
+        "recipient_name": recipient_name,
+        "amount": amount_naira,
+        "bank_name": bank_name.title(),
+        "message": "Transfer initiated successfully"
+        }
