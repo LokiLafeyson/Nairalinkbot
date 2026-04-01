@@ -1,0 +1,193 @@
+import sqlite3
+import hashlib
+import random
+import string
+from solders.keypair import Keypair
+from solders.pubkey import Pubkey
+from solana.rpc.api import Client
+
+SOLANA_CLIENT = Client(
+    "https://api.devnet.solana.com",
+    timeout=10
+)
+
+USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+NAIRA_TO_USD = 1650
+
+def init_db():
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            pin_hash TEXT,
+            wallet_address TEXT,
+            wallet_private_key TEXT,
+            failed_attempts INTEGER DEFAULT 0,
+            locked_until INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id INTEGER,
+            recipient_name TEXT,
+            recipient_bank TEXT,
+            recipient_account TEXT,
+            naira_amount INTEGER,
+            usdc_amount REAL,
+            redemption_code TEXT,
+            transaction_id TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def hash_pin(pin):
+    return hashlib.sha256(pin.encode()).hexdigest()
+
+def get_user(telegram_id):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    user = cursor.fetchone()
+    conn.close()
+    return user
+
+def create_user(telegram_id, first_name, pin):
+    keypair = Keypair()
+    wallet_address = str(keypair.pubkey())
+    wallet_private_key = str(keypair)
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO users
+        (telegram_id, first_name, pin_hash, wallet_address, wallet_private_key)
+        VALUES (?, ?, ?, ?, ?)""",
+        (telegram_id, first_name, hash_pin(pin), wallet_address, wallet_private_key)
+    )
+    conn.commit()
+    conn.close()
+    return wallet_address
+
+def get_wallet_address(telegram_id):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT wallet_address FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def verify_pin(telegram_id, pin):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT pin_hash FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        return result[0] == hash_pin(pin)
+    return False
+
+def increment_failed_attempts(telegram_id):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    conn.commit()
+    conn.close()
+
+def reset_failed_attempts(telegram_id):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET failed_attempts = 0 WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    conn.commit()
+    conn.close()
+
+def get_failed_attempts(telegram_id):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT failed_attempts FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else 0
+
+def generate_redemption_code():
+    letters = ''.join(random.choices(string.ascii_uppercase, k=4))
+    numbers = ''.join(random.choices(string.digits, k=4))
+    return f"NL-{letters}-{numbers}"
+
+def generate_transaction_id():
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(random.choices(chars, k=44))
+
+def save_transaction(sender_id, recipient_name, recipient_bank,
+                     recipient_account, naira_amount, usdc_amount,
+                     redemption_code, transaction_id):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO transactions
+        (sender_id, recipient_name, recipient_bank, recipient_account,
+        naira_amount, usdc_amount, redemption_code, transaction_id, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed')""",
+        (sender_id, recipient_name, recipient_bank, recipient_account,
+         naira_amount, usdc_amount, redemption_code, transaction_id)
+    )
+    conn.commit()
+    conn.close()
+
+def get_transaction_by_code(code):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM transactions WHERE redemption_code = ?",
+        (code.upper(),)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result
+
+def mark_redeemed(code):
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE transactions SET status = 'redeemed' WHERE redemption_code = ?",
+        (code.upper(),)
+    )
+    conn.commit()
+    conn.close()
+
+def get_usdc_balance(wallet_address):
+    try:
+        pubkey = Pubkey.from_string(wallet_address)
+        from solana.rpc.types import TokenAccountOpts
+        opts = TokenAccountOpts(mint=Pubkey.from_string(USDC_MINT))
+        response = SOLANA_CLIENT.get_token_accounts_by_owner(pubkey, opts)
+        if response.value:
+            amount = response.value[0].account.data.parsed[
+                "info"]["tokenAmount"]["uiAmount"]
+            return amount if amount else 0.0
+        return 0.0
+    except Exception:
+        return 0.0
