@@ -1,4 +1,4 @@
-.ext import os
+import os
 import threading
 import sys
 import httpx
