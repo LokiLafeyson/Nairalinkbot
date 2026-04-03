@@ -3,7 +3,7 @@ import threading
 import sys
 import httpx
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -219,8 +219,6 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment_link = generate_transak_link(
         transak_key, amount, currency, wallet_address
     )
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Pay Now via Transak", url=payment_link)]
