@@ -220,6 +220,12 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         transak_key, amount, currency, wallet_address
     )
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Pay Now via Transak", url=payment_link)]
+    ])  
+
     await loading_msg.edit_text(
         f"💱 Live Exchange Rate\n\n"
         f"You send: {symbol}{amount} {currency}\n"
