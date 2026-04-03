@@ -224,7 +224,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Pay Now via Transak", url=payment_link)]
-    ])  
+    ])
 
     await loading_msg.edit_text(
         f"💱 Live Exchange Rate\n\n"
@@ -234,11 +234,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         f"Recipient gets: ₦{naira_equivalent:,}\n"
         f"USDC Value: ${usdc_amount}\n"
         f"Rate: {symbol}1 = ₦{rate:,.0f}\n\n"
-        f"💳 Complete payment here:\n"
-        f"{payment_link}\n\n"
         f"After payment your wallet will be funded "
         f"with USDC automatically.\n\n"
-        f"Then type /send to transfer to Nigeria."
+        f"Then type /send to transfer to Nigeria.",
+        reply_markup=keyboard
     )
     return ConversationHandler.END
 
