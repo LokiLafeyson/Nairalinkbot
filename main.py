@@ -128,6 +128,45 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    if not get_user(telegram_id):
+        await update.message.reply_text(
+            "⚠️ Type /start to create an account first."
+        )
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "💱 Top Up Your NairaLink Wallet\n\n"
+        "What currency are you sending from?\n\n"
+        "Type one of these:\n"
+        "🇬🇧 GBP — British Pounds\n"
+        "🇺🇸 USD — US Dollars\n"
+        "🇪🇺 EUR — Euros\n"
+        "🇨🇦 CAD — Canadian Dollars"
+    )
+    return TOPUP_CURRENCY
+
+async def topup_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    currency = update.message.text.strip().upper()
+    supported = ["GBP", "USD", "EUR", "CAD"]
+    if currency not in supported:
+        await update.message.reply_text(
+            "⚠️ Please type one of these:\n"
+            "GBP, USD, EUR, or CAD"
+        )
+        return TOPUP_CURRENCY
+    context.user_data["topup_currency"] = currency
+    currency_symbols = {
+        "GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"
+    }
+    symbol = currency_symbols[currency]
+    await update.message.reply_text(
+        f"💱 Currency: {currency}\n\n"
+        f"How much {currency} do you want to convert?\n\n"
+        f"Type the amount:\nExample: 50"
+    )
+    return TOPUP_AMOUNT
+
 async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount_text = update.message.text.strip()
     if not amount_text.replace(".", "").isdigit():
@@ -147,12 +186,11 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     wallet_address = get_wallet_address(telegram_id)
 
-    # Send loading message and keep reference to edit it
     loading_msg = await update.message.reply_text(
         "⏳ Getting live exchange rate..."
     )
 
-    # Fetch live NGN rate
+    # Fetch live NGN rate asynchronously
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
@@ -164,14 +202,15 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 raise ValueError("Bad response")
     except Exception:
-        # Fallback to hardcoded rate if API fails
         fallback_rates = {
             "GBP": 2050, "USD": 1620, "EUR": 1750, "CAD": 1190
         }
         rate = fallback_rates[currency]
 
     naira_equivalent = int(amount * rate)
-    costs = calculate_send_cost(naira_equivalent, currency)
+    fee_foreign = round(amount * 0.008, 2)
+    total_foreign = round(amount + fee_foreign, 2)
+    usdc_amount = round(naira_equivalent / NAIRA_TO_USD, 2)
 
     currency_symbols = {"GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"}
     symbol = currency_symbols[currency]
@@ -181,14 +220,13 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         transak_key, amount, currency, wallet_address
     )
 
-    # Edit the loading message instead of sending a new one
     await loading_msg.edit_text(
         f"💱 Live Exchange Rate\n\n"
         f"You send: {symbol}{amount} {currency}\n"
-        f"Fee: {symbol}{costs['fee_foreign']} (0.8%)\n"
-        f"Total: {symbol}{costs['total_foreign']} {currency}\n\n"
-        f"Recipient gets: ₦{costs['naira_amount']:,}\n"
-        f"USDC Value: ${costs['usdc_amount']}\n"
+        f"Fee: {symbol}{fee_foreign} (0.8%)\n"
+        f"Total: {symbol}{total_foreign} {currency}\n\n"
+        f"Recipient gets: ₦{naira_equivalent:,}\n"
+        f"USDC Value: ${usdc_amount}\n"
         f"Rate: {symbol}1 = ₦{rate:,.0f}\n\n"
         f"💳 Complete payment here:\n"
         f"{payment_link}\n\n"
@@ -513,4 +551,4 @@ if __name__ == "__main__":
     except Exception:
         import traceback
         traceback.print_exc()
-        sys.exit(1)                                         
+        sys.exit(1)                                
