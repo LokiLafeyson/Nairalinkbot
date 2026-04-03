@@ -1,6 +1,7 @@
-import os
+.ext import os
 import threading
 import sys
+import httpx
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import (
@@ -9,7 +10,7 @@ from telegram.ext import (
     MessageHandler,
     ConversationHandler,
     filters,
-    ContextTypes
+    ContextTypes,
 )
 from dotenv import load_dotenv
 from helpers import (
@@ -127,84 +128,68 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    telegram_id = update.effective_user.id
-    if not get_user(telegram_id):
-        await update.message.reply_text(
-            "⚠️ Type /start to create an account first."
-        )
-        return ConversationHandler.END
-    await update.message.reply_text(
-        "💱 Top Up Your NairaLink Wallet\n\n"
-        "What currency are you sending from?\n\n"
-        "Type one of these:\n"
-        "🇬🇧 GBP — British Pounds\n"
-        "🇺🇸 USD — US Dollars\n"
-        "🇪🇺 EUR — Euros\n"
-        "🇨🇦 CAD — Canadian Dollars"
-    )
-    return TOPUP_CURRENCY
-
-async def topup_currency(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
-    currency = update.message.text.strip().upper()
-    supported = ["GBP", "USD", "EUR", "CAD"]
-    if currency not in supported:
-        await update.message.reply_text(
-            "⚠️ Please type one of these:\n"
-            "GBP, USD, EUR, or CAD"
-        )
-        return TOPUP_CURRENCY
-    context.user_data["topup_currency"] = currency
-    currency_symbols = {
-        "GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"
-    }
-    symbol = currency_symbols[currency]
-    await update.message.reply_text(
-        f"💱 Currency: {currency}\n\n"
-        f"How much {currency} do you want to convert?\n\n"
-        f"Type the amount:\nExample: 50"
-    )
-    return TOPUP_AMOUNT
-
-async def topup_amount(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount_text = update.message.text.strip()
     if not amount_text.replace(".", "").isdigit():
         await update.message.reply_text(
             "⚠️ Please enter a valid amount:\nExample: 50"
         )
         return TOPUP_AMOUNT
+
     amount = float(amount_text)
     if amount < 5:
         await update.message.reply_text(
             "⚠️ Minimum amount is 5.\n\nPlease enter a higher amount:"
         )
         return TOPUP_AMOUNT
+
     currency = context.user_data["topup_currency"]
     telegram_id = update.effective_user.id
     wallet_address = get_wallet_address(telegram_id)
-    await update.message.reply_text(
+
+    # Send loading message and keep reference to edit it
+    loading_msg = await update.message.reply_text(
         "⏳ Getting live exchange rate..."
     )
-    naira_equivalent = int(amount * 1650)
+
+    # Fetch live NGN rate
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"https://open.er-api.com/v6/latest/{currency}"
+            )
+            data = resp.json()
+            if data.get("result") == "success":
+                rate = data["rates"]["NGN"]
+            else:
+                raise ValueError("Bad response")
+    except Exception:
+        # Fallback to hardcoded rate if API fails
+        fallback_rates = {
+            "GBP": 2050, "USD": 1620, "EUR": 1750, "CAD": 1190
+        }
+        rate = fallback_rates[currency]
+
+    naira_equivalent = int(amount * rate)
     costs = calculate_send_cost(naira_equivalent, currency)
-    currency_symbols = {
-        "GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"
-    }
+
+    currency_symbols = {"GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"}
     symbol = currency_symbols[currency]
+
     transak_key = os.getenv("TRANSAK_API_KEY", "demo")
     payment_link = generate_transak_link(
         transak_key, amount, currency, wallet_address
     )
-    await update.message.reply_text(
+
+    # Edit the loading message instead of sending a new one
+    await loading_msg.edit_text(
         f"💱 Live Exchange Rate\n\n"
         f"You send: {symbol}{amount} {currency}\n"
         f"Fee: {symbol}{costs['fee_foreign']} (0.8%)\n"
         f"Total: {symbol}{costs['total_foreign']} {currency}\n\n"
         f"Recipient gets: ₦{costs['naira_amount']:,}\n"
         f"USDC Value: ${costs['usdc_amount']}\n"
-        f"Rate: {symbol}1 = ₦{costs['rate']:,.0f}\n\n"
+        f"Rate: {symbol}1 = ₦{rate:,.0f}\n\n"
         f"💳 Complete payment here:\n"
         f"{payment_link}\n\n"
         f"After payment your wallet will be funded "
