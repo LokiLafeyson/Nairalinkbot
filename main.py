@@ -380,7 +380,7 @@ async def confirm_send(
         "⏳ Processing your transfer via Paystack...\n\n"
         "Please wait a moment."
     )
-    result = simulate_paystack_transfer(
+    result = initiate_paystack_transfer(
         recipient, bank, account, naira_amount
     )
     if result["status"] == "success":
