@@ -18,9 +18,10 @@ from helpers import (
     verify_pin, increment_failed_attempts, reset_failed_attempts,
     get_failed_attempts, save_transaction, get_usdc_balance,
     generate_transaction_id, NAIRA_TO_USD,
-    simulate_paystack_transfer, get_bank_code,
+    get_bank_code,
     generate_transak_link, calculate_send_cost, get_exchange_rate
 )
+from paystack import initiate_paystack_transfer
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
