@@ -305,7 +305,7 @@ def calculate_send_cost(naira_amount, currency="GBP"):
         "rate": ngn_per_foreign
     }
     
-   def get_user_transactions(telegram_id, limit=5):
+def get_user_transactions(telegram_id, limit=5):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
     cursor.execute(
