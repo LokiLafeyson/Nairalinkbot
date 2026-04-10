@@ -226,13 +226,10 @@ def simulate_paystack_transfer(
         recipient_name, bank_name, account_number, amount_naira):
     import time
     import random
-
     bank_code = get_bank_code(bank_name)
     reference = f"NL-PAY-{''.join(random.choices('0123456789ABCDEF', k=12))}"
     transfer_code = f"TRF_{''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))}"
-
     time.sleep(1.5)
-
     return {
         "status": "success",
         "reference": reference,
