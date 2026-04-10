@@ -29,6 +29,11 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Add naira_balance column if not exists
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN naira_balance INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,10 +58,7 @@ def hash_pin(pin):
 def get_user(telegram_id):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM users WHERE telegram_id = ?",
-        (telegram_id,)
-    )
+    cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
     user = cursor.fetchone()
     conn.close()
     return user
@@ -80,10 +82,7 @@ def create_user(telegram_id, first_name, pin):
 def get_wallet_address(telegram_id):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT wallet_address FROM users WHERE telegram_id = ?",
-        (telegram_id,)
-    )
+    cursor.execute("SELECT wallet_address FROM users WHERE telegram_id = ?", (telegram_id,))
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else None
@@ -91,10 +90,7 @@ def get_wallet_address(telegram_id):
 def verify_pin(telegram_id, pin):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT pin_hash FROM users WHERE telegram_id = ?",
-        (telegram_id,)
-    )
+    cursor.execute("SELECT pin_hash FROM users WHERE telegram_id = ?", (telegram_id,))
     result = cursor.fetchone()
     conn.close()
     if result:
@@ -104,30 +100,21 @@ def verify_pin(telegram_id, pin):
 def increment_failed_attempts(telegram_id):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE telegram_id = ?",
-        (telegram_id,)
-    )
+    cursor.execute("UPDATE users SET failed_attempts = failed_attempts + 1 WHERE telegram_id = ?", (telegram_id,))
     conn.commit()
     conn.close()
 
 def reset_failed_attempts(telegram_id):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET failed_attempts = 0 WHERE telegram_id = ?",
-        (telegram_id,)
-    )
+    cursor.execute("UPDATE users SET failed_attempts = 0 WHERE telegram_id = ?", (telegram_id,))
     conn.commit()
     conn.close()
 
 def get_failed_attempts(telegram_id):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT failed_attempts FROM users WHERE telegram_id = ?",
-        (telegram_id,)
-    )
+    cursor.execute("SELECT failed_attempts FROM users WHERE telegram_id = ?", (telegram_id,))
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else 0
@@ -160,10 +147,7 @@ def save_transaction(sender_id, recipient_name, recipient_bank,
 def get_transaction_by_code(code):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM transactions WHERE redemption_code = ?",
-        (code.upper(),)
-    )
+    cursor.execute("SELECT * FROM transactions WHERE redemption_code = ?", (code.upper(),))
     result = cursor.fetchone()
     conn.close()
     return result
@@ -171,10 +155,7 @@ def get_transaction_by_code(code):
 def mark_redeemed(code):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE transactions SET status = 'redeemed' WHERE redemption_code = ?",
-        (code.upper(),)
-    )
+    cursor.execute("UPDATE transactions SET status = 'redeemed' WHERE redemption_code = ?", (code.upper(),))
     conn.commit()
     conn.close()
 
@@ -185,8 +166,7 @@ def get_usdc_balance(wallet_address):
         opts = TokenAccountOpts(mint=Pubkey.from_string(USDC_MINT))
         response = SOLANA_CLIENT.get_token_accounts_by_owner(pubkey, opts)
         if response.value:
-            amount = response.value[0].account.data.parsed[
-                "info"]["tokenAmount"]["uiAmount"]
+            amount = response.value[0].account.data.parsed["info"]["tokenAmount"]["uiAmount"]
             return amount if amount else 0.0
         return 0.0
     except Exception:
@@ -222,10 +202,8 @@ def get_bank_code(bank_name):
     }
     return bank_codes.get(bank_name.lower().strip(), "000")
 
-def simulate_paystack_transfer(
-        recipient_name, bank_name, account_number, amount_naira):
-    import time
-    import random
+def simulate_paystack_transfer(recipient_name, bank_name, account_number, amount_naira):
+    import time, random
     bank_code = get_bank_code(bank_name)
     reference = f"NL-PAY-{''.join(random.choices('0123456789ABCDEF', k=12))}"
     transfer_code = f"TRF_{''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))}"
@@ -243,13 +221,10 @@ def simulate_paystack_transfer(
     }
 
 def get_exchange_rate(currency="GBP"):
-    import requests
-    import os
+    import requests, os
     try:
         api_key = os.getenv("EXCHANGE_RATE_API_KEY")
-        response = requests.get(
-            f"https://v6.exchangerate-api.com/v6/{api_key}/latest/{currency}"
-        )
+        response = requests.get(f"https://v6.exchangerate-api.com/v6/{api_key}/latest/{currency}")
         data = response.json()
         if data["result"] == "success":
             ngn_rate = data["conversion_rates"]["NGN"]
@@ -269,8 +244,7 @@ def get_exchange_rate(currency="GBP"):
         "currency": currency
     }
 
-def generate_transak_link(
-        api_key, amount, currency, wallet_address):
+def generate_transak_link(api_key, amount, currency, wallet_address):
     import urllib.parse
     base_url = "https://global-stg.transak.com"
     params = {
@@ -303,6 +277,33 @@ def calculate_send_cost(naira_amount, currency="GBP"):
         "currency": currency,
         "rate": ngn_per_foreign
     }
+
+def get_user_balance(telegram_id):
+    conn = sqlite3.connect("nairalink.db")
+    c = conn.cursor()
+    c.execute("SELECT naira_balance FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def update_user_balance(telegram_id, amount, mode="add"):
+    conn = sqlite3.connect("nairalink.db")
+    c = conn.cursor()
+    current = get_user_balance(telegram_id)
+    if mode == "add":
+        new_balance = current + amount
+    elif mode == "deduct":
+        if current < amount:
+            conn.close()
+            return False
+        new_balance = current - amount
+    else:
+        conn.close()
+        return False
+    c.execute("UPDATE users SET naira_balance = ? WHERE telegram_id = ?", (new_balance, telegram_id))
+    conn.commit()
+    conn.close()
+    return True
 
 def get_user_transactions(telegram_id, limit=5):
     conn = sqlite3.connect("nairalink.db")
