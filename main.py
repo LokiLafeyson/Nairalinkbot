@@ -1,13 +1,16 @@
 import os
 import threading
 import sys
+import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -30,6 +33,7 @@ from admin import add_funds, get_balance_admin, list_users
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# Conversation states
 SET_PIN = 1
 CONFIRM_PIN = 2
 VERIFY_PIN = 3
@@ -43,9 +47,35 @@ TOPUP_AMOUNT = 11
 
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        # Handle simulated payment callback
+        if self.path.startswith('/simulate-payment'):
+            query = parse_qs(urlparse(self.path).query)
+            user_id = query.get('user', [None])[0]
+            amount_naira = query.get('amount', [None])[0]
+
+            if user_id and amount_naira:
+                try:
+                    from helpers import update_user_balance
+                    update_user_balance(int(user_id), int(amount_naira), "add")
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/html')
+                    self.end_headers()
+                    self.wfile.write(b"<html><body><h2>Payment Successful</h2><p>Your wallet has been credited. You may close this window.</p></body></html>")
+                except Exception:
+                    self.send_response(500)
+                    self.end_headers()
+                    self.wfile.write(b"Internal Server Error")
+            else:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing parameters")
+            return
+
+        # Health check
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"NairaLink is alive")
+
     def log_message(self, format, *args):
         pass
 
@@ -250,7 +280,7 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_bal = get_user_balance(sender_id)
     if user_bal < naira_amount:
         await update.message.reply_text(
-            f"❌ Insufficient balance.\n\nYour balance: ₦{user_bal:,}\nYou tried to send: ₦{naira_amount:,}\n\nPlease top up using /add_funds (admin only)."
+            f"❌ Insufficient balance.\n\nYour balance: ₦{user_bal:,}\nYou tried to send: ₦{naira_amount:,}\n\nPlease use /topup to add funds."
         )
         return ConversationHandler.END
 
@@ -266,7 +296,6 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             naira_amount, usdc_amount,
             result["reference"], transaction_id
         )
-        # Deduct from internal balance
         update_user_balance(sender_id, naira_amount, "deduct")
         await update.message.reply_text(
             f"✅ Transfer Successful!\n\n"
@@ -288,13 +317,6 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled. Type /start to begin again.")
-    return ConversationHandler.END
-
-async def topup_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "For demo, please use /add_funds (admin command) to credit your balance.\n\n"
-        "In production, you would pay via Transak or Coinbase."
-    )
     return ConversationHandler.END
 
 def main():
@@ -324,10 +346,12 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    # Simplified topup handler – just shows a message
     topup_handler = ConversationHandler(
         entry_points=[CommandHandler("topup", topup)],
-        states={},
+        states={
+            TOPUP_CURRENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, topup_currency)],
+            TOPUP_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, topup_amount)],
+        },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
@@ -341,7 +365,7 @@ def main():
     app.add_handler(CommandHandler("wallet", wallet_command))
     app.add_handler(CommandHandler("reset", reset))
 
-    # Admin commands
+    # Admin commands (only visible to admin)
     app.add_handler(CommandHandler("add_funds", add_funds))
     app.add_handler(CommandHandler("get_balance", get_balance_admin))
     app.add_handler(CommandHandler("list_users", list_users))
