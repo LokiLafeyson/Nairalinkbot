@@ -8,6 +8,7 @@ from helpers import (
     generate_transak_link, NAIRA_TO_USD
 )
 
+
 def get_user_transactions(telegram_id, limit=5):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
@@ -24,6 +25,35 @@ def get_user_transactions(telegram_id, limit=5):
     results = cursor.fetchall()
     conn.close()
     return results
+
+
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    conn = sqlite3.connect("nairalink.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )
+    tables = cursor.fetchall()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM transactions")
+        count = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT sender_id FROM transactions LIMIT 3"
+        )
+        rows = cursor.fetchall()
+    except Exception as e:
+        count = f"Error: {e}"
+        rows = []
+    conn.close()
+    await update.message.reply_text(
+        f"🔍 Debug Info\n\n"
+        f"Your ID: {telegram_id}\n"
+        f"Tables: {tables}\n"
+        f"Transaction count: {count}\n"
+        f"Sender IDs found: {rows}"
+    )
+
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -43,6 +73,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Type /topup to add funds.",
         parse_mode="Markdown"
     )
+
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -73,13 +104,15 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         date = created_at[:10] if created_at else "Unknown"
         status_icon = "✅" if status == "completed" else "⏳"
         message += (
-            f"{i}. {status_icon} ₦{naira_amount:,} → {recipient_name}\n"
+            f"{i}. {status_icon} ₦{naira_amount:,} → "
+            f"{recipient_name}\n"
             f"   Bank: {recipient_bank}\n"
             f"   Account: {recipient_account}\n"
             f"   Date: {date}\n"
             f"   ID: {transaction_id[:12]}...\n\n"
         )
     await update.message.reply_text(message)
+
 
 async def wallet_command(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -95,6 +128,7 @@ async def wallet_command(
         f"Send USDC here to fund your account.",
         parse_mode="Markdown"
     )
+
 
 async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -112,6 +146,7 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+
 async def help_command(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -127,6 +162,7 @@ async def help_command(
         "Fees under 1 percent. Arrives in seconds."
     )
 
+
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     conn = sqlite3.connect("nairalink.db")
@@ -140,6 +176,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🗑️ Account reset. Type /start to create a new one."
     )
+
 
 async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -159,6 +196,7 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return 10
 
+
 async def topup_currency(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     currency = update.message.text.strip().upper()
@@ -177,6 +215,7 @@ async def topup_currency(
     )
     return 11
 
+
 async def topup_amount(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount_text = update.message.text.strip()
@@ -188,7 +227,8 @@ async def topup_amount(
     amount = float(amount_text)
     if amount < 5:
         await update.message.reply_text(
-            "⚠️ Minimum amount is 5.\n\nPlease enter a higher amount:"
+            "⚠️ Minimum amount is 5.\n\n"
+            "Please enter a higher amount:"
         )
         return 11
     currency = context.user_data["topup_currency"]
@@ -209,7 +249,8 @@ async def topup_amount(
                 raise ValueError("Bad response")
     except Exception:
         fallback_rates = {
-            "GBP": 2050, "USD": 1620, "EUR": 1750, "CAD": 1190
+            "GBP": 2050, "USD": 1620,
+            "EUR": 1750, "CAD": 1190
         }
         rate = fallback_rates[currency]
     naira_equivalent = int(amount * rate)
