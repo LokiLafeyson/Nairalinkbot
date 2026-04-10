@@ -191,6 +191,7 @@ def get_usdc_balance(wallet_address):
         return 0.0
     except Exception:
         return 0.0
+
 def get_bank_code(bank_name):
     bank_codes = {
         "access bank": "044",
@@ -242,7 +243,8 @@ def simulate_paystack_transfer(
         "amount": amount_naira,
         "bank_name": bank_name.title(),
         "message": "Transfer initiated successfully"
-        }
+    }
+
 def get_exchange_rate(currency="GBP"):
     import requests
     import os
@@ -304,20 +306,20 @@ def calculate_send_cost(naira_amount, currency="GBP"):
         "currency": currency,
         "rate": ngn_per_foreign
     }
-    
+
 def get_user_transactions(telegram_id, limit=5):
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
     cursor.execute(
-        """SELECT recipient_name, recipient_bank, 
+        """SELECT recipient_name, recipient_bank,
         recipient_account, naira_amount, transaction_id,
-        status, created_at 
-        FROM transactions 
-        WHERE sender_id = ? 
-        ORDER BY created_at DESC 
+        status, created_at
+        FROM transactions
+        WHERE sender_id = ?
+        ORDER BY created_at DESC
         LIMIT ?""",
         (telegram_id, limit)
     )
     results = cursor.fetchall()
     conn.close()
-    return results 
+    return results
