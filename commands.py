@@ -1,4 +1,5 @@
 import httpx
+import secrets
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from helpers import (
@@ -9,7 +10,10 @@ from helpers import (
 # State constants for topup conversation (must match main.py)
 TOPUP_CURRENCY, TOPUP_AMOUNT = 10, 11
 
-# ---------- BALANCE ----------
+# We'll import payment_sessions from main later (to avoid circular import)
+# It will be set in main.py and referenced here via a global
+payment_sessions = None  # placeholder, will be assigned in main
+
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
@@ -27,7 +31,6 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ---------- HISTORY ----------
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
@@ -43,7 +46,6 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"• ₦{amount:,} to {recipient} ({bank})\n  {date[:10]}\n  Status: {status}\n\n"
     await update.message.reply_text(msg)
 
-# ---------- WALLET ----------
 async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
@@ -52,7 +54,6 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wallet = get_wallet_address(telegram_id)
     await update.message.reply_text(f"👛 Your Solana wallet:\n`{wallet}`\n\nSend USDC here to fund your account.", parse_mode="Markdown")
 
-# ---------- FUND (info) ----------
 async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     wallet = get_wallet_address(telegram_id)
@@ -67,7 +68,6 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ---------- HELP ----------
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 How NairaLink Works\n\n"
@@ -79,7 +79,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands: /start, /topup, /send, /balance, /history, /wallet, /help"
     )
 
-# ---------- RESET ----------
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import sqlite3
     telegram_id = update.effective_user.id
@@ -90,7 +89,6 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await update.message.reply_text("🗑️ Account reset. Type /start to create a new one.")
 
-# ---------- TOPUP CONVERSATION ----------
 async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
@@ -119,6 +117,7 @@ async def topup_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return TOPUP_AMOUNT
 
 async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global payment_sessions
     amount_text = update.message.text.strip()
     try:
         amount = float(amount_text)
@@ -139,7 +138,6 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = resp.json()
             rate = data["rates"]["NGN"]
     except Exception:
-        # Fallback rate
         fallback_rates = {"GBP": 2450, "USD": 1600, "EUR": 1750, "CAD": 1180}
         rate = fallback_rates.get(currency, 1600)
 
@@ -148,9 +146,15 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_deducted = round(amount + fee, 2)
     symbol = {"GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"}.get(currency, "$")
 
-    # Generate a unique payment link (simulated)
+    # Generate a unique token for this payment session
+    token = secrets.token_urlsafe(16)
     user_id = update.effective_user.id
-    payment_link = f"https://nairalinks.com.ng/simulate-payment?user={user_id}&amount={naira_equivalent}"
+    if payment_sessions is not None:
+        payment_sessions[token] = {
+            "user_id": user_id,
+            "amount": naira_equivalent
+        }
+    payment_link = f"https://nairalinks.com.ng/simulate-payment?token={token}"
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Pay Now", url=payment_link)]
