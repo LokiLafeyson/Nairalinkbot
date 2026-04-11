@@ -202,24 +202,6 @@ def get_bank_code(bank_name):
     }
     return bank_codes.get(bank_name.lower().strip(), "000")
 
-def simulate_paystack_transfer(recipient_name, bank_name, account_number, amount_naira):
-    import time, random
-    bank_code = get_bank_code(bank_name)
-    reference = f"NL-PAY-{''.join(random.choices('0123456789ABCDEF', k=12))}"
-    transfer_code = f"TRF_{''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))}"
-    time.sleep(1.5)
-    return {
-        "status": "success",
-        "reference": reference,
-        "transfer_code": transfer_code,
-        "bank_code": bank_code,
-        "account_number": account_number,
-        "recipient_name": recipient_name,
-        "amount": amount_naira,
-        "bank_name": bank_name.title(),
-        "message": "Transfer initiated successfully"
-    }
-
 def get_exchange_rate(currency="GBP"):
     import requests, os
     try:
