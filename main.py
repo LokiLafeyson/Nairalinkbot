@@ -29,14 +29,12 @@ from commands import (
 )
 from admin import add_funds, get_balance_admin, list_users, cmd_check_balance
 
-# Import payment_sessions from commands (will be set later)
 import commands
-commands.payment_sessions = {}  # shared dictionary for payment tokens
+commands.payment_sessions = {}
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Conversation states
 SET_PIN = 1
 CONFIRM_PIN = 2
 VERIFY_PIN = 3
@@ -50,7 +48,6 @@ TOPUP_AMOUNT = 11
 
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # Handle simulated payment callback
         if self.path.startswith('/simulate-payment'):
             query = parse_qs(urlparse(self.path).query)
             token = query.get('token', [None])[0]
@@ -60,14 +57,13 @@ class PingHandler(BaseHTTPRequestHandler):
                 user_id = session['user_id']
                 amount_naira = session['amount']
 
-                # Credit user balance
                 from helpers import update_user_balance
                 update_user_balance(user_id, amount_naira, "add")
 
                 self.send_response(200)
                 self.send_header('Content-type', 'text/html')
                 self.end_headers()
-                self.wfile.write(b"""
+                html = """
                     <html>
                     <body style="text-align:center;padding:50px;font-family:sans-serif">
                     <h2>✅ Payment Successful</h2>
@@ -75,14 +71,14 @@ class PingHandler(BaseHTTPRequestHandler):
                     <p>You may close this window and return to Telegram.</p>
                     </body>
                     </html>
-                """)
+                """
+                self.wfile.write(html.encode())
             else:
                 self.send_response(404)
                 self.end_headers()
                 self.wfile.write(b"Invalid or expired payment link.")
             return
 
-        # Health check
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"NairaLink is alive")
@@ -165,18 +161,12 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
-        await update.message.reply_text(
-            "⚠️ Type /start to create an account."
-        )
+        await update.message.reply_text("⚠️ Type /start to create an account.")
         return ConversationHandler.END
     if get_failed_attempts(telegram_id) >= 3:
-        await update.message.reply_text(
-            "🔒 Account locked. Contact support."
-        )
+        await update.message.reply_text("🔒 Account locked. Contact support.")
         return ConversationHandler.END
-    await update.message.reply_text(
-        "🔐 Enter your PIN to continue:"
-    )
+    await update.message.reply_text("🔐 Enter your PIN to continue:")
     return VERIFY_PIN
 
 async def verify_pin_for_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -287,7 +277,6 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     transaction_id = generate_transaction_id()
     sender_id = update.effective_user.id
 
-    # Check internal balance
     user_bal = get_user_balance(sender_id)
     if user_bal < naira_amount:
         await update.message.reply_text(
@@ -295,10 +284,7 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    await update.message.reply_text(
-        "⏳ Processing your transfer via Paystack...\n\n"
-        "Please wait a moment."
-    )
+    await update.message.reply_text("⏳ Processing your transfer via Paystack...\n\nPlease wait a moment.")
     result = initiate_paystack_transfer(recipient, bank, account, naira_amount)
 
     if result["status"] == "success":
@@ -375,8 +361,6 @@ def main():
     app.add_handler(CommandHandler("fund", fund))
     app.add_handler(CommandHandler("wallet", wallet_command))
     app.add_handler(CommandHandler("reset", reset))
-
-    # Admin commands
     app.add_handler(CommandHandler("add_funds", add_funds))
     app.add_handler(CommandHandler("get_balance", get_balance_admin))
     app.add_handler(CommandHandler("list_users", list_users))
