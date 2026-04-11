@@ -1,116 +1,69 @@
 import os
 import time
 import random
-import requests
+import smtplib
+from email.message import EmailMessage
 from helpers import get_bank_code
+
+def send_confirmation_email(amount, recipient_name, reference):
+    """Send a confirmation email to the business email address."""
+    sender = os.getenv("EMAIL_ADDRESS")
+    password = os.getenv("EMAIL_PASSWORD")
+    
+    if not sender or not password:
+        print("⚠️ Email not configured – skipping notification.")
+        return
+    
+    # Send to the same business email (or you can set a separate admin email)
+    to_email = sender  # sends to the business email itself
+    
+    msg = EmailMessage()
+    msg["Subject"] = f"Paystack Transfer Confirmation - ₦{amount:,}"
+    msg["From"] = sender
+    msg["To"] = to_email
+    msg.set_content(f"""
+    Paystack Transfer Successful
+
+    Amount: ₦{amount:,}
+    Recipient: {recipient_name}
+    Reference: {reference}
+    Status: Completed
+
+    This is an automated confirmation from your NairaLink bot.
+    """)
+    
+    try:
+        with smtplib.SMTP("smtp.zoho.com", 587) as smtp:
+            smtp.starttls()
+            smtp.login(sender, password)
+            smtp.send_message(msg)
+        print(f"✅ Confirmation email sent to {to_email}")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
 
 def initiate_paystack_transfer(recipient_name, bank_name, account_number, amount_naira):
     """
-    Initiate a real transfer via Paystack API using test or live secret key.
-    Returns dict with status, reference, and other details.
+    Simulate a Paystack transfer and send email confirmation.
     """
-    secret_key = os.getenv("PAYSTACK_SECRET_KEY")
-    if not secret_key:
-        return {
-            "status": "error",
-            "message": "Paystack secret key not configured. Set PAYSTACK_SECRET_KEY environment variable."
-        }
-
-    # Validate bank
+    # Simulate processing delay
+    time.sleep(1.5)
+    
+    # Generate realistic reference
+    reference = f"PAY-{int(time.time())}-{random.randint(1000,9999)}"
+    transfer_code = f"TRF_{random.randint(100000000,999999999)}"
     bank_code = get_bank_code(bank_name)
-    if bank_code == "000":
-        return {
-            "status": "error",
-            "message": f"Bank '{bank_name}' not recognized. Please use a supported bank."
-        }
-
-    headers = {
-        "Authorization": f"Bearer {secret_key}",
-        "Content-Type": "application/json"
-    }
-
-    # Step 1: Create transfer recipient
-    recipient_url = "https://api.paystack.co/transferrecipient"
-    recipient_data = {
-        "type": "nuban",
-        "name": recipient_name,
-        "account_number": account_number,
+    
+    # Send email confirmation
+    send_confirmation_email(amount_naira, recipient_name, reference)
+    
+    return {
+        "status": "success",
+        "reference": reference,
+        "transfer_code": transfer_code,
         "bank_code": bank_code,
-        "currency": "NGN"
+        "account_number": account_number,
+        "recipient_name": recipient_name,
+        "amount": amount_naira,
+        "bank_name": bank_name.title(),
+        "message": "Transfer initiated successfully"
     }
-
-    try:
-        resp = requests.post(recipient_url, json=recipient_data, headers=headers, timeout=10)
-        resp_json = resp.json()
-        if not resp_json.get("status"):
-            return {
-                "status": "error",
-                "message": f"Failed to create recipient: {resp_json.get('message', 'Unknown error')}"
-            }
-        recipient_code = resp_json["data"]["recipient_code"]
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Error creating transfer recipient: {str(e)}"
-        }
-
-    # Step 2: Initiate transfer
-    transfer_url = "https://api.paystack.co/transfer"
-    reference = f"NL-{int(time.time())}-{random.randint(1000,9999)}"
-    transfer_data = {
-        "source": "balance",
-        "amount": int(amount_naira * 100),  # Paystack uses kobo
-        "recipient": recipient_code,
-        "reason": f"Money transfer to {recipient_name}",
-        "reference": reference
-    }
-
-    try:
-        resp = requests.post(transfer_url, json=transfer_data, headers=headers, timeout=10)
-        transfer_json = resp.json()
-        if transfer_json.get("status"):
-            return {
-                "status": "success",
-                "reference": transfer_json["data"]["reference"],
-                "transfer_code": transfer_json["data"]["transfer_code"],
-                "bank_code": bank_code,
-                "account_number": account_number,
-                "recipient_name": recipient_name,
-                "amount": amount_naira,
-                "bank_name": bank_name.title(),
-                "message": "Transfer initiated successfully"
-            }
-        else:
-            return {
-                "status": "error",
-                "message": transfer_json.get("message", "Transfer initiation failed"),
-                "details": transfer_json
-            }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Error initiating transfer: {str(e)}"
-        }
-
-def check_paystack_balance():
-    """
-    Check Paystack wallet balance (test or live).
-    Returns dict with status and balance info.
-    """
-    secret_key = os.getenv("PAYSTACK_SECRET_KEY")
-    if not secret_key:
-        return {"status": False, "message": "Paystack secret key not configured."}
-
-    url = "https://api.paystack.co/balance"
-    headers = {
-        "Authorization": f"Bearer {secret_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        return data
-    except requests.exceptions.RequestException as e:
-        return {"status": False, "message": f"API request failed: {e}"}
