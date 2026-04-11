@@ -1,16 +1,15 @@
 import os
 import threading
 import sys
-import json
+import secrets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
-    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -28,7 +27,11 @@ from commands import (
     balance, history, wallet_command, fund,
     help_command, reset, topup, topup_currency, topup_amount
 )
-from admin import add_funds, get_balance_admin, list_users
+from admin import add_funds, get_balance_admin, list_users, cmd_check_balance
+
+# Import payment_sessions from commands (will be set later)
+import commands
+commands.payment_sessions = {}  # shared dictionary for payment tokens
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -50,25 +53,33 @@ class PingHandler(BaseHTTPRequestHandler):
         # Handle simulated payment callback
         if self.path.startswith('/simulate-payment'):
             query = parse_qs(urlparse(self.path).query)
-            user_id = query.get('user', [None])[0]
-            amount_naira = query.get('amount', [None])[0]
+            token = query.get('token', [None])[0]
 
-            if user_id and amount_naira:
-                try:
-                    from helpers import update_user_balance
-                    update_user_balance(int(user_id), int(amount_naira), "add")
-                    self.send_response(200)
-                    self.send_header('Content-type', 'text/html')
-                    self.end_headers()
-                    self.wfile.write(b"<html><body><h2>Payment Successful</h2><p>Your wallet has been credited. You may close this window.</p></body></html>")
-                except Exception:
-                    self.send_response(500)
-                    self.end_headers()
-                    self.wfile.write(b"Internal Server Error")
-            else:
-                self.send_response(400)
+            if token and token in commands.payment_sessions:
+                session = commands.payment_sessions.pop(token)
+                user_id = session['user_id']
+                amount_naira = session['amount']
+
+                # Credit user balance
+                from helpers import update_user_balance
+                update_user_balance(user_id, amount_naira, "add")
+
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
                 self.end_headers()
-                self.wfile.write(b"Missing parameters")
+                self.wfile.write(b"""
+                    <html>
+                    <body style="text-align:center;padding:50px;font-family:sans-serif">
+                    <h2>✅ Payment Successful</h2>
+                    <p>Your wallet has been credited.</p>
+                    <p>You may close this window and return to Telegram.</p>
+                    </body>
+                    </html>
+                """)
+            else:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Invalid or expired payment link.")
             return
 
         # Health check
@@ -365,10 +376,11 @@ def main():
     app.add_handler(CommandHandler("wallet", wallet_command))
     app.add_handler(CommandHandler("reset", reset))
 
-    # Admin commands (only visible to admin)
+    # Admin commands
     app.add_handler(CommandHandler("add_funds", add_funds))
     app.add_handler(CommandHandler("get_balance", get_balance_admin))
     app.add_handler(CommandHandler("list_users", list_users))
+    app.add_handler(CommandHandler("check_balance", cmd_check_balance))
 
     print("NairaLink bot is running...")
     app.run_polling()
