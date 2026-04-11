@@ -1,5 +1,4 @@
 import httpx
-import secrets
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from helpers import (
@@ -7,12 +6,7 @@ from helpers import (
     get_wallet_address, get_usdc_balance, get_user_transactions
 )
 
-# State constants for topup conversation (must match main.py)
 TOPUP_CURRENCY, TOPUP_AMOUNT = 10, 11
-
-# We'll import payment_sessions from main later (to avoid circular import)
-# It will be set in main.py and referenced here via a global
-payment_sessions = None  # placeholder, will be assigned in main
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -62,7 +56,7 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         f"💳 Fund Your Wallet\n\n"
-        f"To add funds, use /topup and pay with your card.\n\n"
+        f"To add funds, use /topup and click the button.\n\n"
         f"Or send USDC directly to:\n`{wallet}`\n\n"
         f"Type /balance to check balance.",
         parse_mode="Markdown"
@@ -72,7 +66,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 How NairaLink Works\n\n"
         "1️⃣ Create account with /start\n"
-        "2️⃣ Add funds with /topup (pay with card via secure link)\n"
+        "2️⃣ Add funds with /topup (click the button)\n"
         "3️⃣ Type /send — enter recipient details\n"
         "4️⃣ Money goes directly to Nigerian bank via Paystack\n\n"
         "💡 Fees under 1 percent. Arrives in seconds.\n\n"
@@ -117,7 +111,6 @@ async def topup_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return TOPUP_AMOUNT
 
 async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global payment_sessions
     amount_text = update.message.text.strip()
     try:
         amount = float(amount_text)
@@ -131,7 +124,6 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     currency = context.user_data["topup_currency"]
     loading_msg = await update.message.reply_text("⏳ Getting live exchange rate...")
 
-    # Fetch live rate
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"https://api.exchangerate-api.com/v4/latest/{currency}")
@@ -145,19 +137,11 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fee = round(amount * 0.008, 2)
     total_deducted = round(amount + fee, 2)
     symbol = {"GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"}.get(currency, "$")
-
-    # Generate a unique token for this payment session
-    token = secrets.token_urlsafe(16)
     user_id = update.effective_user.id
-    if payment_sessions is not None:
-        payment_sessions[token] = {
-            "user_id": user_id,
-            "amount": naira_equivalent
-        }
-    payment_link = f"https://nairalinks.com.ng/simulate-payment?token={token}"
 
+    # Inline callback button – no external link
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Pay Now", url=payment_link)]
+        [InlineKeyboardButton("💳 Pay Now", callback_data=f"topup_{user_id}_{naira_equivalent}")]
     ])
 
     await loading_msg.edit_text(
