@@ -1,15 +1,14 @@
 import os
 import threading
 import sys
-import secrets
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -29,9 +28,6 @@ from commands import (
 )
 from admin import add_funds, get_balance_admin, list_users, cmd_check_balance
 
-import commands
-commands.payment_sessions = {}
-
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -48,41 +44,9 @@ TOPUP_AMOUNT = 11
 
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path.startswith('/simulate-payment'):
-            query = parse_qs(urlparse(self.path).query)
-            token = query.get('token', [None])[0]
-
-            if token and token in commands.payment_sessions:
-                session = commands.payment_sessions.pop(token)
-                user_id = session['user_id']
-                amount_naira = session['amount']
-
-                from helpers import update_user_balance
-                update_user_balance(user_id, amount_naira, "add")
-
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                html = """
-                    <html>
-                    <body style="text-align:center;padding:50px;font-family:sans-serif">
-                    <h2>✅ Payment Successful</h2>
-                    <p>Your wallet has been credited.</p>
-                    <p>You may close this window and return to Telegram.</p>
-                    </body>
-                    </html>
-                """
-                self.wfile.write(html.encode())
-            else:
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b"Invalid or expired payment link.")
-            return
-
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"NairaLink is alive")
-
     def log_message(self, format, *args):
         pass
 
@@ -103,7 +67,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user:
         await update.message.reply_text(
             f"👋 Welcome back, {first_name}!\n\n"
-            f"💱 /topup — Fund wallet with GBP/USD/EUR\n"
+            f"💱 /topup — Fund wallet\n"
             f"💸 /send — Send money home\n"
             f"💰 /balance — Check your balance\n"
             f"👛 /wallet — View your wallet\n"
@@ -316,6 +280,27 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled. Type /start to begin again.")
     return ConversationHandler.END
 
+async def topup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data.startswith("topup_"):
+        parts = data.split("_")
+        if len(parts) == 3:
+            user_id = int(parts[1])
+            amount = int(parts[2])
+            if update.effective_user.id != user_id:
+                await query.edit_message_text("⛔ Unauthorized")
+                return
+            update_user_balance(user_id, amount, "add")
+            new_bal = get_user_balance(user_id)
+            await query.edit_message_text(
+                f"✅ Payment successful!\n\n"
+                f"₦{amount:,} added to your wallet.\n"
+                f"New balance: ₦{new_bal:,}\n\n"
+                f"Use /send to transfer money to Nigeria."
+            )
+
 def main():
     init_db()
     keep_alive()
@@ -365,6 +350,7 @@ def main():
     app.add_handler(CommandHandler("get_balance", get_balance_admin))
     app.add_handler(CommandHandler("list_users", list_users))
     app.add_handler(CommandHandler("check_balance", cmd_check_balance))
+    app.add_handler(CallbackQueryHandler(topup_callback, pattern="^topup_"))
 
     print("NairaLink bot is running...")
     app.run_polling()
