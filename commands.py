@@ -3,7 +3,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from helpers import (
     get_user, get_user_balance, update_user_balance,
-    get_wallet_address, get_usdc_balance, get_user_transactions
+    get_wallet_address, get_usdc_balance, get_user_transactions,
+    generate_moonpay_url
 )
 
 TOPUP_CURRENCY, TOPUP_AMOUNT = 10, 11
@@ -46,7 +47,11 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Type /start to create an account.")
         return
     wallet = get_wallet_address(telegram_id)
-    await update.message.reply_text(f"👛 Your Solana wallet:\n`{wallet}`\n\nSend USDC here to fund your account.", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"👛 Your Solana wallet:\n`{wallet}`\n\n"
+        f"Send USDC here to fund your account.",
+        parse_mode="Markdown"
+    )
 
 async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -137,11 +142,14 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fee = round(amount * 0.008, 2)
     total_deducted = round(amount + fee, 2)
     symbol = {"GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"}.get(currency, "$")
-    user_id = update.effective_user.id
 
-    # Inline callback button – no external link
+    # Get user's wallet and generate MoonPay link
+    telegram_id = update.effective_user.id
+    wallet = get_wallet_address(telegram_id)
+    moonpay_url = generate_moonpay_url(wallet)
+
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Pay Now", callback_data=f"topup_{user_id}_{naira_equivalent}")]
+        [InlineKeyboardButton("💳 Pay Now via MoonPay", url=moonpay_url)]
     ])
 
     await loading_msg.edit_text(
@@ -151,7 +159,8 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Total charged: {symbol}{total_deducted} {currency}\n\n"
         f"You will receive: ₦{naira_equivalent:,}\n"
         f"Rate: 1 {currency} = ₦{rate:,.0f}\n\n"
-        f"Click the button below to complete your top-up.",
+        f"Click below to complete payment via MoonPay.\n"
+        f"Your wallet will be credited automatically once payment clears.",
         reply_markup=keyboard
     )
     return ConversationHandler.END
