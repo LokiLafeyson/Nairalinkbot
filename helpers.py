@@ -273,19 +273,26 @@ def get_exchange_rate(currency="GBP"):
 def generate_moonpay_url(wallet_address):
     public_key = os.getenv("MOONPAY_PUBLIC_KEY", "")
     secret_key = os.getenv("MOONPAY_SECRET_KEY", "")
-    base_url = "https://buy-sandbox.moonpay.com"
+
     params = {
         "apiKey": public_key,
         "currencyCode": "usdc_sol",
         "walletAddress": wallet_address,
     }
+
     query_string = urllib.parse.urlencode(params)
+
+    # MoonPay requires HMAC-SHA256 of the full query string including "?"
     signature = hmac.new(
-        secret_key.encode(),
-        f"?{query_string}".encode(),
+        secret_key.encode("utf-8"),
+        f"?{query_string}".encode("utf-8"),
         hashlib.sha256
     ).digest()
-    sig_b64 = base64.urlsafe_b64encode(signature).decode()
+
+    # MoonPay rejects base64 padding characters — strip them
+    sig_b64 = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
+
+    base_url = "https://buy-sandbox.moonpay.com"
     return f"{base_url}?{query_string}&signature={sig_b64}"
 
 
