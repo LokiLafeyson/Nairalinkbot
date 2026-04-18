@@ -1,4 +1,7 @@
 import os
+import json
+import hmac
+import hashlib
 import threading
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -19,7 +22,8 @@ from helpers import (
     get_failed_attempts, save_transaction, get_usdc_balance,
     generate_transaction_id, NAIRA_TO_USD,
     get_bank_code, get_user_balance, update_user_balance,
-    generate_transak_link, calculate_send_cost, get_exchange_rate
+    generate_transak_link, calculate_send_cost, get_exchange_rate,
+    get_user_by_wallet, generate_moonpay_url
 )
 from paystack import initiate_paystack_transfer
 from commands import (
@@ -30,6 +34,7 @@ from admin import add_funds, get_balance_admin, list_users, cmd_check_balance
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+MOONPAY_WEBHOOK_SECRET = os.getenv("MOONPAY_WEBHOOK_SECRET", "")
 
 SET_PIN = 1
 CONFIRM_PIN = 2
@@ -42,23 +47,72 @@ SEND_CONFIRM = 8
 TOPUP_CURRENCY = 10
 TOPUP_AMOUNT = 11
 
+
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"NairaLink is alive")
+
+    def do_POST(self):
+        if self.path == "/moonpay/webhook":
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length)
+
+            # Verify MoonPay signature
+            sig_header = self.headers.get('Moonpay-Signature-V2', '')
+            expected = hmac.new(
+                MOONPAY_WEBHOOK_SECRET.encode(),
+                body,
+                hashlib.sha256
+            ).hexdigest()
+
+            if not hmac.compare_digest(expected, sig_header):
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b"Unauthorized")
+                return
+
+            try:
+                data = json.loads(body)
+                if data.get('type') == 'transaction_updated':
+                    txn = data.get('data', {})
+                    if txn.get('status') == 'completed':
+                        wallet = txn.get('walletAddress')
+                        amount = float(txn.get('quoteCurrencyAmount', 0))
+                        naira_amount = int(amount * NAIRA_TO_USD)
+
+                        user = get_user_by_wallet(wallet)
+                        if user:
+                            telegram_id = user[0]
+                            update_user_balance(telegram_id, naira_amount, "add")
+                            print(f"[MoonPay] Credited ₦{naira_amount:,} to user {telegram_id}")
+            except Exception as e:
+                print(f"[MoonPay Webhook Error] {e}")
+
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
     def log_message(self, format, *args):
         pass
+
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), PingHandler)
     server.serve_forever()
 
+
 def keep_alive():
     thread = threading.Thread(target=run_server)
     thread.daemon = True
     thread.start()
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -84,12 +138,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return SET_PIN
 
+
 async def set_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pin = update.message.text.strip()
     if not pin.isdigit() or len(pin) != 4:
         await update.message.reply_text(
-            "⚠️ PIN must be exactly 4 digits.\n\n"
-            "Please enter a 4-digit PIN:"
+            "⚠️ PIN must be exactly 4 digits.\n\nPlease enter a 4-digit PIN:"
         )
         return SET_PIN
     context.user_data["temp_pin"] = pin
@@ -97,6 +151,7 @@ async def set_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Got it.\n\n🔐 Confirm your PIN by entering it again:"
     )
     return CONFIRM_PIN
+
 
 async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pin = update.message.text.strip()
@@ -122,6 +177,7 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+
 async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
@@ -132,6 +188,7 @@ async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     await update.message.reply_text("🔐 Enter your PIN to continue:")
     return VERIFY_PIN
+
 
 async def verify_pin_for_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -152,6 +209,7 @@ async def verify_pin_for_send(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     return SEND_AMOUNT
 
+
 async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount_text = update.message.text.strip()
     if not amount_text.isdigit() or int(amount_text) < 500:
@@ -162,10 +220,10 @@ async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["naira_amount"] = int(amount_text)
     await update.message.reply_text(
         f"💵 Amount: ₦{int(amount_text):,}\n\n"
-        f"👤 Who are you sending to?\n\n"
-        f"Type recipient's name:\nExample: Mum"
+        f"👤 Who are you sending to?\n\nType recipient's name:\nExample: Mum"
     )
     return SEND_RECIPIENT
+
 
 async def get_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recipient = update.message.text.strip().title()
@@ -177,6 +235,7 @@ async def get_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SEND_BANK
 
+
 async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bank = update.message.text.strip()
     bank_code = get_bank_code(bank)
@@ -184,23 +243,21 @@ async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"⚠️ Bank not recognized.\n\n"
             f"Please enter a valid Nigerian bank:\n"
-            f"Access Bank, GTBank, Zenith Bank, "
-            f"First Bank, UBA, Opay, Kuda, PalmPay"
+            f"Access Bank, GTBank, Zenith Bank, First Bank, UBA, Opay, Kuda, PalmPay"
         )
         return SEND_BANK
     context.user_data["recipient_bank"] = bank.title()
     await update.message.reply_text(
-        f"🏦 Bank: {bank.title()}\n\n"
-        f"🔢 Enter their 10-digit account number:"
+        f"🏦 Bank: {bank.title()}\n\n🔢 Enter their 10-digit account number:"
     )
     return SEND_ACCOUNT
+
 
 async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     account = update.message.text.strip()
     if not account.isdigit() or len(account) != 10:
         await update.message.reply_text(
-            "⚠️ Must be exactly 10 digits.\n\n"
-            "Enter account number again:"
+            "⚠️ Must be exactly 10 digits.\n\nEnter account number again:"
         )
         return SEND_ACCOUNT
     context.user_data["recipient_account"] = account
@@ -224,6 +281,7 @@ async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SEND_CONFIRM
 
+
 async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = update.message.text.strip().upper()
     if response == "NO":
@@ -244,11 +302,14 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_bal = get_user_balance(sender_id)
     if user_bal < naira_amount:
         await update.message.reply_text(
-            f"❌ Insufficient balance.\n\nYour balance: ₦{user_bal:,}\nYou tried to send: ₦{naira_amount:,}\n\nPlease use /topup to add funds."
+            f"❌ Insufficient balance.\n\n"
+            f"Your balance: ₦{user_bal:,}\n"
+            f"You tried to send: ₦{naira_amount:,}\n\n"
+            f"Please use /topup to add funds."
         )
         return ConversationHandler.END
 
-    await update.message.reply_text("⏳ Processing your transfer via Paystack...\n\nPlease wait a moment.")
+    await update.message.reply_text("⏳ Processing your transfer...\n\nPlease wait a moment.")
     result = initiate_paystack_transfer(recipient, bank, account, naira_amount)
 
     if result["status"] == "success":
@@ -272,13 +333,17 @@ async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            f"❌ Transfer failed.\n\nReason: {result.get('message', 'Unknown error')}\n\nType /send to start again."
+            f"❌ Transfer failed.\n\n"
+            f"Reason: {result.get('message', 'Unknown error')}\n\n"
+            f"Type /send to start again."
         )
     return ConversationHandler.END
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled. Type /start to begin again.")
     return ConversationHandler.END
+
 
 async def topup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -300,6 +365,7 @@ async def topup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"New balance: ₦{new_bal:,}\n\n"
                 f"Use /send to transfer money to Nigeria."
             )
+
 
 def main():
     init_db()
@@ -354,6 +420,7 @@ def main():
 
     print("NairaLink bot is running...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     try:
