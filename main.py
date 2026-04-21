@@ -5,7 +5,7 @@ import hashlib
 import threading
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -48,6 +48,27 @@ TOPUP_CURRENCY = 10
 TOPUP_AMOUNT = 11
 
 
+def get_main_menu():
+    keyboard = [
+        [
+            InlineKeyboardButton("💸 Send", callback_data="menu_send"),
+            InlineKeyboardButton("📥 Receive", callback_data="menu_receive"),
+        ],
+        [
+            InlineKeyboardButton("💰 Balance", callback_data="menu_balance"),
+            InlineKeyboardButton("👛 Wallet", callback_data="menu_wallet"),
+        ],
+        [
+            InlineKeyboardButton("📋 History", callback_data="menu_history"),
+            InlineKeyboardButton("➕ Top Up", callback_data="menu_topup"),
+        ],
+        [
+            InlineKeyboardButton("📖 Help", callback_data="menu_help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -59,7 +80,6 @@ class PingHandler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length)
 
-            # Verify MoonPay signature
             sig_header = self.headers.get('Moonpay-Signature-V2', '')
             expected = hmac.new(
                 MOONPAY_WEBHOOK_SECRET.encode(),
@@ -81,7 +101,6 @@ class PingHandler(BaseHTTPRequestHandler):
                         wallet = txn.get('walletAddress')
                         amount = float(txn.get('quoteCurrencyAmount', 0))
                         naira_amount = int(amount * NAIRA_TO_USD)
-
                         user = get_user_by_wallet(wallet)
                         if user:
                             telegram_id = user[0]
@@ -120,13 +139,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(telegram_id)
     if user:
         await update.message.reply_text(
-            f"👋 Welcome back, {first_name}!\n\n"
-            f"💱 /topup — Fund wallet\n"
-            f"💸 /send — Send money home\n"
-            f"💰 /balance — Check your balance\n"
-            f"👛 /wallet — View your wallet\n"
-            f"📋 /history — Past transactions\n"
-            f"📖 /help — How NairaLink works"
+            f"👋 Welcome back, {first_name}!\n\nWhat would you like to do?",
+            reply_markup=get_main_menu()
         )
         return ConversationHandler.END
     else:
@@ -134,45 +148,69 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👋 Welcome to NairaLink, {first_name}!\n\n"
             f"Send money home instantly — your family receives "
             f"naira directly in their bank account.\n\n"
-            f"🔐 Please set a 4-digit PIN:"
+            f"🔐 Please set a 4-digit PIN to secure your account:"
         )
         return SET_PIN
 
 
 async def set_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pin = update.message.text.strip()
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
     if not pin.isdigit() or len(pin) != 4:
-        await update.message.reply_text(
-            "⚠️ PIN must be exactly 4 digits.\n\nPlease enter a 4-digit PIN:"
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⚠️ PIN must be exactly 4 digits.\n\nPlease enter a 4-digit PIN:"
         )
         return SET_PIN
     context.user_data["temp_pin"] = pin
-    await update.message.reply_text(
-        "✅ Got it.\n\n🔐 Confirm your PIN by entering it again:"
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="✅ Got it.\n\n🔐 Confirm your PIN by entering it again:"
     )
     return CONFIRM_PIN
 
 
 async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pin = update.message.text.strip()
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
     temp_pin = context.user_data.get("temp_pin")
     if pin != temp_pin:
-        await update.message.reply_text(
-            "❌ PINs do not match.\n\nEnter a new 4-digit PIN:"
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ PINs do not match.\n\nEnter a new 4-digit PIN:"
         )
         return SET_PIN
     telegram_id = update.effective_user.id
     first_name = update.effective_user.first_name
     wallet_address = create_user(telegram_id, first_name, pin)
-    await update.message.reply_text(
-        f"🎉 Account created!\n\n"
-        f"Welcome to NairaLink, {first_name}.\n\n"
-        f"Your Solana wallet:\n`{wallet_address}`\n\n"
-        f"💱 /topup — Fund wallet\n"
-        f"💸 /send — Send money home\n"
-        f"💰 /balance — Check balance\n"
-        f"👛 /wallet — View wallet\n"
-        f"📋 /history — Past transactions",
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            f"🎉 Account created!\n\n"
+            f"Welcome to NairaLink, {first_name}.\n\n"
+            f"Your Solana wallet:\n`{wallet_address}`\n\n"
+            f"What would you like to do?"
+        ),
+        parse_mode="Markdown",
+        reply_markup=get_main_menu()
+    )
+
+    await context.bot.send_message(
+        chat_id=telegram_id,
+        text=(
+            f"🔐 *NairaLink PIN — Save This Securely*\n\n"
+            f"Your PIN: `{temp_pin}`\n\n"
+            f"⚠️ Do not share this with anyone.\n"
+            f"NairaLink staff will never ask for your PIN.\n\n"
+            f"Store it somewhere safe — you'll need it to send money."
+        ),
         parse_mode="Markdown"
     )
     return ConversationHandler.END
@@ -193,19 +231,32 @@ async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def verify_pin_for_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     pin = update.message.text.strip()
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
     if not verify_pin(telegram_id, pin):
         increment_failed_attempts(telegram_id)
         remaining = 3 - get_failed_attempts(telegram_id)
         if remaining <= 0:
-            await update.message.reply_text("🔒 Account locked. Contact support.")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="🔒 Account locked. Contact support."
+            )
         else:
-            await update.message.reply_text(f"❌ Wrong PIN. {remaining} attempt(s) left.")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"❌ Wrong PIN. {remaining} attempt(s) left."
+            )
         return ConversationHandler.END
     reset_failed_attempts(telegram_id)
-    await update.message.reply_text(
-        "✅ PIN verified.\n\n"
-        "💸 How much do you want to send?\n\n"
-        "Type amount in naira:\nExample: 50000"
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            "✅ PIN verified.\n\n"
+            "💸 How much do you want to send?\n\n"
+            "Type amount in naira:\nExample: 50000"
+        )
     )
     return SEND_AMOUNT
 
@@ -241,9 +292,9 @@ async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bank_code = get_bank_code(bank)
     if bank_code == "000":
         await update.message.reply_text(
-            f"⚠️ Bank not recognized.\n\n"
-            f"Please enter a valid Nigerian bank:\n"
-            f"Access Bank, GTBank, Zenith Bank, First Bank, UBA, Opay, Kuda, PalmPay"
+            "⚠️ Bank not recognized.\n\n"
+            "Please enter a valid Nigerian bank:\n"
+            "Access Bank, GTBank, Zenith Bank, First Bank, UBA, Opay, Kuda, PalmPay"
         )
         return SEND_BANK
     context.user_data["recipient_bank"] = bank.title()
@@ -349,6 +400,39 @@ async def topup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+
+    if data == "menu_send":
+        await query.message.reply_text("💸 Use /send to start a transfer.")
+        return
+    elif data == "menu_receive":
+        wallet = get_wallet_address(update.effective_user.id)
+        await query.message.reply_text(
+            f"📥 *Your Solana Wallet Address:*\n\n`{wallet}`\n\n"
+            f"Share this address to receive USDC.",
+            parse_mode="Markdown"
+        )
+        return
+    elif data == "menu_balance":
+        bal = get_user_balance(update.effective_user.id)
+        await query.message.reply_text(f"💰 Your balance: ₦{bal:,}")
+        return
+    elif data == "menu_wallet":
+        wallet = get_wallet_address(update.effective_user.id)
+        await query.message.reply_text(
+            f"👛 *Your Wallet:*\n\n`{wallet}`",
+            parse_mode="Markdown"
+        )
+        return
+    elif data == "menu_history":
+        await query.message.reply_text("📋 Use /history to view past transactions.")
+        return
+    elif data == "menu_topup":
+        await query.message.reply_text("➕ Use /topup to fund your wallet.")
+        return
+    elif data == "menu_help":
+        await query.message.reply_text("📖 Use /help to learn how NairaLink works.")
+        return
+
     if data.startswith("topup_"):
         parts = data.split("_")
         if len(parts) == 3:
@@ -416,7 +500,7 @@ def main():
     app.add_handler(CommandHandler("get_balance", get_balance_admin))
     app.add_handler(CommandHandler("list_users", list_users))
     app.add_handler(CommandHandler("check_balance", cmd_check_balance))
-    app.add_handler(CallbackQueryHandler(topup_callback, pattern="^topup_"))
+    app.add_handler(CallbackQueryHandler(topup_callback))
 
     print("NairaLink bot is running...")
     app.run_polling()
