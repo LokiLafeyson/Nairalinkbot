@@ -9,6 +9,28 @@ from helpers import (
 
 TOPUP_CURRENCY, TOPUP_AMOUNT = 10, 11
 
+
+def get_main_menu():
+    keyboard = [
+        [
+            InlineKeyboardButton("💸 Send", callback_data="menu_send"),
+            InlineKeyboardButton("📥 Receive", callback_data="menu_receive"),
+        ],
+        [
+            InlineKeyboardButton("💰 Balance", callback_data="menu_balance"),
+            InlineKeyboardButton("👛 Wallet", callback_data="menu_wallet"),
+        ],
+        [
+            InlineKeyboardButton("📋 History", callback_data="menu_history"),
+            InlineKeyboardButton("➕ Top Up", callback_data="menu_topup"),
+        ],
+        [
+            InlineKeyboardButton("📖 Help", callback_data="menu_help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
@@ -21,10 +43,11 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 Your NairaLink Balance\n\n"
         f"🇳🇬 Naira balance (spendable): ₦{naira_bal:,}\n"
         f"💎 USDC on Solana: ${usdc_bal:.2f}\n\n"
-        f"Wallet: `{wallet}`\n\n"
-        f"Use /topup to add funds.",
-        parse_mode="Markdown"
+        f"Wallet: `{wallet}`",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu()
     )
+
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -33,13 +56,17 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     txs = get_user_transactions(telegram_id, limit=5)
     if not txs:
-        await update.message.reply_text("No transactions yet.")
+        await update.message.reply_text(
+            "No transactions yet.",
+            reply_markup=get_main_menu()
+        )
         return
     msg = "📜 Last 5 transactions:\n\n"
     for tx in txs:
         recipient, bank, account, amount, txid, status, date = tx
         msg += f"• ₦{amount:,} to {recipient} ({bank})\n  {date[:10]}\n  Status: {status}\n\n"
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, reply_markup=get_main_menu())
+
 
 async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -50,8 +77,10 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👛 Your Solana wallet:\n`{wallet}`\n\n"
         f"Send USDC here to fund your account.",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=get_main_menu()
     )
+
 
 async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -62,21 +91,23 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"💳 Fund Your Wallet\n\n"
         f"To add funds, use /topup and click the button.\n\n"
-        f"Or send USDC directly to:\n`{wallet}`\n\n"
-        f"Type /balance to check balance.",
-        parse_mode="Markdown"
+        f"Or send USDC directly to:\n`{wallet}`",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu()
     )
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 How NairaLink Works\n\n"
         "1️⃣ Create account with /start\n"
-        "2️⃣ Add funds with /topup (click the button)\n"
+        "2️⃣ Add funds with /topup\n"
         "3️⃣ Type /send — enter recipient details\n"
         "4️⃣ Money goes directly to Nigerian bank via Paystack\n\n"
-        "💡 Fees under 1 percent. Arrives in seconds.\n\n"
-        "Commands: /start, /topup, /send, /balance, /history, /wallet, /help"
+        "💡 Fees under 1%. Arrives in seconds.",
+        reply_markup=get_main_menu()
     )
+
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import sqlite3
@@ -88,6 +119,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await update.message.reply_text("🗑️ Account reset. Type /start to create a new one.")
 
+
 async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
@@ -95,9 +127,11 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     await update.message.reply_text(
         "💱 Top Up Your Wallet\n\n"
-        "Please enter the currency you are sending from (e.g., GBP, USD, EUR, CAD):"
+        "Please enter the currency you are sending from\n"
+        "Example: GBP, USD, EUR, CAD"
     )
     return TOPUP_CURRENCY
+
 
 async def topup_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     currency = update.message.text.strip().upper()
@@ -115,15 +149,20 @@ async def topup_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return TOPUP_AMOUNT
 
+
 async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount_text = update.message.text.strip()
     try:
         amount = float(amount_text)
         if amount < 5:
-            await update.message.reply_text("⚠️ Minimum amount is 5. Please enter a higher amount.")
+            await update.message.reply_text(
+                "⚠️ Minimum amount is 5. Please enter a higher amount."
+            )
             return TOPUP_AMOUNT
     except ValueError:
-        await update.message.reply_text("⚠️ Invalid amount. Please enter a number (e.g., 50).")
+        await update.message.reply_text(
+            "⚠️ Invalid amount. Please enter a number (e.g., 50)."
+        )
         return TOPUP_AMOUNT
 
     currency = context.user_data["topup_currency"]
@@ -131,7 +170,9 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"https://api.exchangerate-api.com/v4/latest/{currency}")
+            resp = await client.get(
+                f"https://api.exchangerate-api.com/v4/latest/{currency}"
+            )
             data = resp.json()
             rate = data["rates"]["NGN"]
     except Exception:
@@ -143,7 +184,6 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_deducted = round(amount + fee, 2)
     symbol = {"GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"}.get(currency, "$")
 
-    # Get user's wallet and generate MoonPay link
     telegram_id = update.effective_user.id
     wallet = get_wallet_address(telegram_id)
     moonpay_url = generate_moonpay_url(wallet)
