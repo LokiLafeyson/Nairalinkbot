@@ -1,4 +1,25 @@
 print("STARTING UP", flush=True)
+
+try:
+    import os
+    print("os ok", flush=True)
+    from dotenv import load_dotenv
+    print("dotenv ok", flush=True)
+    load_dotenv()
+    from telegram.ext import ApplicationBuilder
+    print("telegram ok", flush=True)
+    from helpers import init_db
+    print("helpers ok", flush=True)
+    from commands import get_main_menu
+    print("commands ok", flush=True)
+    from admin import add_funds
+    print("admin ok", flush=True)
+    from paystack import initiate_paystack_transfer
+    print("paystack ok", flush=True)
+except Exception as e:
+    print(f"IMPORT ERROR: {e}", flush=True)
+    import sys
+    sys.exit(1)
 import os
 import json
 import hmac
