@@ -477,4 +477,3 @@ def generate_moonpay_url(wallet_address: str, currency_code: str = "ngn",
 
     sig_b64 = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
     return f"https://buy-sandbox.moonpay.com?{query_string}&signature={sig_b64}"
-    
