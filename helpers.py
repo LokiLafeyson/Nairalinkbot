@@ -16,6 +16,17 @@ SOLANA_CLIENT = Client(
 )
 
 USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+
+# ─── Fee Configuration ────────────────────────────────────────────────────────
+# All fees as percentages (e.g. 1.5 = 1.5%)
+# Change values here — they propagate everywhere automatically
+
+TRANSAK_FEE_PERCENT   = 1.5   # Transak onramp charge
+PAYSTACK_FEE_PERCENT  = 1.5   # Paystack disbursement charge
+PLATFORM_FEE_PERCENT  = 0.5   # NairaLink margin
+TOTAL_FEE_PERCENT     = TRANSAK_FEE_PERCENT + PAYSTACK_FEE_PERCENT + PLATFORM_FEE_PERCENT  # = 3.5%
+
+# Fallback exchange rate used only when API is unavailable
 NAIRA_TO_USD = 1650
 
 
@@ -61,7 +72,6 @@ def init_db():
         )
     """)
 
-    # Stores pending topups awaiting user confirmation
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pending_topups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,7 +212,6 @@ def update_user_balance(telegram_id: int, amount: int, mode: str = "add") -> boo
 # ─── Pending Topups ───────────────────────────────────────────────────────────
 
 def save_pending_topup(telegram_id: int, naira_amount: int, currency: str, foreign_amount: float) -> int:
-    """Store a pending topup and return its row id."""
     conn = sqlite3.connect("nairalink.db")
     cursor = conn.cursor()
     cursor.execute(
@@ -347,26 +356,47 @@ def get_exchange_rate(currency: str = "GBP") -> dict:
     return {
         "ngn_per_foreign": rate,
         "foreign_per_usdc": 1.0,
-        "ngn_per_usdc": 1650,
+        "ngn_per_usdc": NAIRA_TO_USD,
         "currency": currency
     }
 
 
 def calculate_send_cost(naira_amount: int, currency: str = "GBP") -> dict:
+    """
+    Calculate full transfer cost broken down by fee component.
+    Fee is applied to the naira amount, then converted to foreign currency.
+    """
     rates = get_exchange_rate(currency)
     ngn_per_foreign = rates["ngn_per_foreign"]
-    foreign_amount = round(naira_amount / ngn_per_foreign, 2)
-    usdc_amount = round(naira_amount / rates["ngn_per_usdc"], 2)
-    fee_foreign = round(foreign_amount * 0.008, 2)
-    total_foreign = round(foreign_amount + fee_foreign, 2)
+
+    # Fee breakdown (applied to naira amount)
+    transak_fee_naira  = round(naira_amount * TRANSAK_FEE_PERCENT / 100)
+    paystack_fee_naira = round(naira_amount * PAYSTACK_FEE_PERCENT / 100)
+    platform_fee_naira = round(naira_amount * PLATFORM_FEE_PERCENT / 100)
+    total_fee_naira    = transak_fee_naira + paystack_fee_naira + platform_fee_naira
+    total_naira        = naira_amount + total_fee_naira
+
+    # Foreign currency equivalents
+    foreign_amount     = round(naira_amount / ngn_per_foreign, 2)
+    total_fee_foreign  = round(total_fee_naira / ngn_per_foreign, 2)
+    total_foreign      = round(total_naira / ngn_per_foreign, 2)
+
+    usdc_amount        = round(naira_amount / rates["ngn_per_usdc"], 2)
+
     return {
-        "naira_amount": naira_amount,
-        "foreign_amount": foreign_amount,
-        "fee_foreign": fee_foreign,
-        "total_foreign": total_foreign,
-        "usdc_amount": usdc_amount,
-        "currency": currency,
-        "rate": ngn_per_foreign
+        "naira_amount":        naira_amount,
+        "transak_fee_naira":   transak_fee_naira,
+        "paystack_fee_naira":  paystack_fee_naira,
+        "platform_fee_naira":  platform_fee_naira,
+        "total_fee_naira":     total_fee_naira,
+        "total_naira":         total_naira,
+        "foreign_amount":      foreign_amount,
+        "total_fee_foreign":   total_fee_foreign,
+        "total_foreign":       total_foreign,
+        "usdc_amount":         usdc_amount,
+        "currency":            currency,
+        "rate":                ngn_per_foreign,
+        "total_fee_percent":   TOTAL_FEE_PERCENT,
     }
 
 
@@ -405,8 +435,28 @@ def get_bank_code(bank_name: str) -> str:
 
 # ─── Payment Links ────────────────────────────────────────────────────────────
 
+def generate_transak_link(api_key: str, amount: float, currency: str, wallet_address: str) -> str:
+    params = {
+        "apiKey": api_key,
+        "cryptoCurrencyCode": "USDC",
+        "network": "solana",
+        "walletAddress": wallet_address,
+        "fiatCurrency": currency,
+        "fiatAmount": str(amount),
+        "disableWalletAddressForm": "true",
+        "hideMenu": "true",
+        "themeColor": "00A651",
+    }
+    query = urllib.parse.urlencode(params)
+    return f"https://global-stg.transak.com?{query}"
+
+
 def generate_moonpay_url(wallet_address: str, currency_code: str = "ngn",
                           base_currency: str = "usdc_sol") -> str:
+    """
+    MoonPay onramp link. Currently used as fallback — Transak is primary.
+    Kept for webhook compatibility.
+    """
     public_key = os.getenv("MOONPAY_PUBLIC_KEY", "")
     secret_key = os.getenv("MOONPAY_SECRET_KEY", "")
 
@@ -427,19 +477,4 @@ def generate_moonpay_url(wallet_address: str, currency_code: str = "ngn",
 
     sig_b64 = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
     return f"https://buy-sandbox.moonpay.com?{query_string}&signature={sig_b64}"
-
-
-def generate_transak_link(api_key: str, amount: float, currency: str, wallet_address: str) -> str:
-    params = {
-        "apiKey": api_key,
-        "cryptoCurrencyCode": "USDC",
-        "network": "solana",
-        "walletAddress": wallet_address,
-        "fiatCurrency": currency,
-        "fiatAmount": str(amount),
-        "disableWalletAddressForm": "true",
-        "hideMenu": "true",
-        "themeColor": "00A651",
-    }
-    query = urllib.parse.urlencode(params)
-    return f"https://global-stg.transak.com?{query}"
+    
