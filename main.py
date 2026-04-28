@@ -1,3 +1,4 @@
+print("STARTING UP", flush=True)
 import os
 import json
 import hmac
