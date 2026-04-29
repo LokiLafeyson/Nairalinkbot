@@ -24,7 +24,9 @@ from commands import (
 from handlers import (
     start, set_pin, confirm_pin,
     send, verify_pin_for_send, get_amount, get_recipient,
-    get_bank, get_account, confirm_send, cancel,
+    get_bank, get_account,
+    send_confirm_yes, send_confirm_no, cancel,
+    topup_confirm_callback, topup_cancel_callback,
     button_callback,
     SET_PIN, CONFIRM_PIN, VERIFY_PIN,
     SEND_AMOUNT, SEND_RECIPIENT, SEND_BANK, SEND_ACCOUNT, SEND_CONFIRM,
@@ -49,20 +51,15 @@ class PingHandler(BaseHTTPRequestHandler):
         if self.path == "/moonpay/webhook":
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
-
             sig_header = self.headers.get("Moonpay-Signature-V2", "")
             expected = hmac.new(
-                MOONPAY_WEBHOOK_SECRET.encode(),
-                body,
-                hashlib.sha256
+                MOONPAY_WEBHOOK_SECRET.encode(), body, hashlib.sha256
             ).hexdigest()
-
             if not hmac.compare_digest(expected, sig_header):
                 self.send_response(401)
                 self.end_headers()
                 self.wfile.write(b"Unauthorized")
                 return
-
             try:
                 data = json.loads(body)
                 if data.get("type") == "transaction_updated":
@@ -73,17 +70,14 @@ class PingHandler(BaseHTTPRequestHandler):
                         naira_amount = int(amount * NAIRA_TO_USD)
                         user = get_user_by_wallet(wallet)
                         if user:
-                            telegram_id = user[0]
-                            update_user_balance(telegram_id, naira_amount, "add")
-                            print(f"[MoonPay Webhook] ₦{naira_amount:,} credited to {telegram_id}")
+                            update_user_balance(user[0], naira_amount, "add")
+                            print(f"[Webhook] ₦{naira_amount:,} credited to {user[0]}", flush=True)
             except Exception as e:
-                print(f"[MoonPay Webhook Error] {e}")
-
+                print(f"[Webhook Error] {e}", flush=True)
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"ok")
             return
-
         self.send_response(404)
         self.end_headers()
 
@@ -93,13 +87,11 @@ class PingHandler(BaseHTTPRequestHandler):
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), PingHandler)
-    server.serve_forever()
+    HTTPServer(("0.0.0.0", port), PingHandler).serve_forever()
 
 
 def keep_alive():
-    thread = threading.Thread(target=run_server, daemon=True)
-    thread.start()
+    threading.Thread(target=run_server, daemon=True).start()
 
 
 # ─── App Entry Point ──────────────────────────────────────────────────────────
@@ -111,6 +103,7 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # Registration flow
     registration_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -120,6 +113,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
+    # Send flow — confirm buttons handled INSIDE this handler so state ends properly
     send_handler = ConversationHandler(
         entry_points=[CommandHandler("send", send)],
         states={
@@ -128,11 +122,18 @@ def main():
             SEND_RECIPIENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_recipient)],
             SEND_BANK:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bank)],
             SEND_ACCOUNT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account)],
-            SEND_CONFIRM:   [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_send)],
+            SEND_CONFIRM: [
+                CallbackQueryHandler(send_confirm_yes, pattern="^send_confirm_yes$"),
+                CallbackQueryHandler(send_confirm_no,  pattern="^send_confirm_no$"),
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(send_confirm_no, pattern="^send_confirm_no$"),
+        ]
     )
 
+    # Topup flow — confirm/cancel buttons handled INSIDE this handler
     topup_handler = ConversationHandler(
         entry_points=[CommandHandler("topup", topup)],
         states={
@@ -140,25 +141,32 @@ def main():
                 CallbackQueryHandler(topup_currency, pattern="^topup_cur_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, topup_currency),
             ],
-            TOPUP_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, topup_amount)],
+            TOPUP_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, topup_amount),
+                CallbackQueryHandler(topup_confirm_callback, pattern="^topup_confirm_"),
+                CallbackQueryHandler(topup_cancel_callback,  pattern="^topup_cancel_"),
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(topup_cancel_callback, pattern="^topup_cancel_"),
+        ]
     )
 
     app.add_handler(registration_handler)
     app.add_handler(send_handler)
     app.add_handler(topup_handler)
-    app.add_handler(CommandHandler("balance",     balance))
-    app.add_handler(CommandHandler("history",     history))
-    app.add_handler(CommandHandler("help",        help_command))
-    app.add_handler(CommandHandler("fund",        fund))
-    app.add_handler(CommandHandler("wallet",      wallet_command))
-    app.add_handler(CommandHandler("reset",       reset))
-    app.add_handler(CommandHandler("add_funds",   add_funds))
-    app.add_handler(CommandHandler("get_balance", get_balance_admin))
-    app.add_handler(CommandHandler("list_users",  list_users))
+    app.add_handler(CommandHandler("balance",       balance))
+    app.add_handler(CommandHandler("history",       history))
+    app.add_handler(CommandHandler("help",          help_command))
+    app.add_handler(CommandHandler("fund",          fund))
+    app.add_handler(CommandHandler("wallet",        wallet_command))
+    app.add_handler(CommandHandler("reset",         reset))
+    app.add_handler(CommandHandler("add_funds",     add_funds))
+    app.add_handler(CommandHandler("get_balance",   get_balance_admin))
+    app.add_handler(CommandHandler("list_users",    list_users))
     app.add_handler(CommandHandler("check_balance", cmd_check_balance))
-    app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(CallbackQueryHandler(button_callback))  # main menu fallback
 
     print("Bot polling started...", flush=True)
     app.run_polling()
