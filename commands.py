@@ -5,30 +5,29 @@ from helpers import (
     get_user, get_user_balance, update_user_balance,
     get_wallet_address, get_usdc_balance, get_user_transactions,
     generate_moonpay_url, save_pending_topup,
-    TRANSAK_FEE_PERCENT, PAYSTACK_FEE_PERCENT,
-    PLATFORM_FEE_PERCENT, TOTAL_FEE_PERCENT
+    PAYSTACK_FEE_PERCENT, PLATFORM_FEE_PERCENT, TOTAL_FEE_PERCENT
 )
 
 TOPUP_CURRENCY, TOPUP_AMOUNT = 10, 11
 
-CURRENCY_SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"}
+CURRENCY_SYMBOLS    = {"GBP": "£", "USD": "$", "EUR": "€", "CAD": "CA$"}
 SUPPORTED_CURRENCIES = list(CURRENCY_SYMBOLS.keys())
-FALLBACK_RATES = {"GBP": 2450, "USD": 1600, "EUR": 1750, "CAD": 1180}
+FALLBACK_RATES      = {"GBP": 2450, "USD": 1600, "EUR": 1750, "CAD": 1180}
 
 
 def get_main_menu() -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton("💸 Send", callback_data="menu_send"),
+            InlineKeyboardButton("💸 Send",    callback_data="menu_send"),
             InlineKeyboardButton("📥 Receive", callback_data="menu_receive"),
         ],
         [
             InlineKeyboardButton("💰 Balance", callback_data="menu_balance"),
-            InlineKeyboardButton("👛 Wallet", callback_data="menu_wallet"),
+            InlineKeyboardButton("👛 Wallet",  callback_data="menu_wallet"),
         ],
         [
             InlineKeyboardButton("📋 History", callback_data="menu_history"),
-            InlineKeyboardButton("➕ Top Up", callback_data="menu_topup"),
+            InlineKeyboardButton("➕ Top Up",  callback_data="menu_topup"),
         ],
         [
             InlineKeyboardButton("📖 Help", callback_data="menu_help"),
@@ -47,8 +46,8 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     naira_bal = get_user_balance(telegram_id)
-    wallet = get_wallet_address(telegram_id)
-    usdc_bal = get_usdc_balance(wallet) if wallet else 0.0
+    wallet    = get_wallet_address(telegram_id)
+    usdc_bal  = get_usdc_balance(wallet) if wallet else 0.0
     await update.message.reply_text(
         f"💰 *Your NairaLink Balance*\n\n"
         f"🇳🇬 Naira (spendable): ₦{naira_bal:,}\n"
@@ -77,9 +76,9 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "📋 *Last 5 Transactions*\n\n"
     for tx in txs:
         recipient, bank, account, amount, txid, status, date = tx
-        status_icon = "✅" if status == "completed" else "⏳" if status == "pending" else "🔄"
+        icon = "✅" if status == "completed" else "⏳" if status == "pending" else "🔄"
         msg += (
-            f"{status_icon} ₦{amount:,} → *{recipient}*\n"
+            f"{icon} ₦{amount:,} → *{recipient}*\n"
             f"   {bank} · {account}\n"
             f"   {date[:10]} · {status}\n\n"
         )
@@ -112,7 +111,7 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         f"💳 *Fund Your Wallet*\n\n"
-        f"Use /topup to add funds via Transak.\n\n"
+        f"Use /topup to add funds via MoonPay.\n\n"
         f"Or send USDC directly to:\n`{wallet}`\n\n"
         f"Check your balance anytime with /balance.",
         parse_mode="Markdown",
@@ -128,8 +127,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3️⃣ Send money — /send\n"
         "4️⃣ Recipient receives naira directly in their bank account\n\n"
         f"💡 Total fee: {TOTAL_FEE_PERCENT}% — cheaper than Western Union (5–8%).\n"
-        f"   Onramp: {TRANSAK_FEE_PERCENT}% · Transfer: {PAYSTACK_FEE_PERCENT}% · Platform: {PLATFORM_FEE_PERCENT}%\n\n"
-        "Powered by Paystack + Solana.\n\n"
+        f"   Transfer: {PAYSTACK_FEE_PERCENT}% · Platform: {PLATFORM_FEE_PERCENT}%\n\n"
+        "Powered by MoonPay + Paystack + Solana.\n\n"
         "Commands: /start /topup /send /balance /history /wallet",
         parse_mode="Markdown",
         reply_markup=get_main_menu()
@@ -157,6 +156,8 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
+    context.user_data.clear()  # Clear any stale state
+
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🇬🇧 GBP", callback_data="topup_cur_GBP"),
@@ -167,10 +168,8 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🇨🇦 CAD", callback_data="topup_cur_CAD"),
         ],
     ])
-
     await update.message.reply_text(
-        "➕ *Top Up Your Wallet*\n\n"
-        "Which currency are you paying from?",
+        "➕ *Top Up Your Wallet*\n\nWhich currency are you paying from?",
         parse_mode="Markdown",
         reply_markup=keyboard
     )
@@ -178,20 +177,18 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def topup_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Handle both inline button selection and typed currency
     if update.callback_query:
         query = update.callback_query
         await query.answer()
-        currency = query.data.replace("topup_cur_", "")
+        currency     = query.data.replace("topup_cur_", "")
         message_func = query.message.reply_text
     else:
-        currency = update.message.text.strip().upper()
+        currency     = update.message.text.strip().upper()
         message_func = update.message.reply_text
 
     if currency not in SUPPORTED_CURRENCIES:
         await message_func(
-            "⚠️ We don't support that currency yet.\n\n"
-            "Please choose: GBP, USD, EUR, or CAD"
+            "⚠️ We don't support that currency yet.\n\nPlease choose: GBP, USD, EUR, or CAD"
         )
         return TOPUP_CURRENCY
 
@@ -222,16 +219,13 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return TOPUP_AMOUNT
 
-    currency = context.user_data.get("topup_currency", "GBP")
-    symbol = CURRENCY_SYMBOLS[currency]
-    loading_msg = await update.message.reply_text("⏳ Fetching live exchange rate...")
+    currency     = context.user_data.get("topup_currency", "GBP")
+    symbol       = CURRENCY_SYMBOLS[currency]
+    loading_msg  = await update.message.reply_text("⏳ Fetching live exchange rate...")
 
-    # Fetch live rate
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"https://api.exchangerate-api.com/v4/latest/{currency}"
-            )
+            resp = await client.get(f"https://api.exchangerate-api.com/v4/latest/{currency}")
             data = resp.json()
             rate = data["rates"]["NGN"]
     except Exception:
@@ -239,18 +233,21 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     naira_equivalent = int(amount * rate)
 
-    # Fee breakdown using config values
-    transak_fee  = round(amount * TRANSAK_FEE_PERCENT / 100, 2)
-    paystack_fee = round(amount * PAYSTACK_FEE_PERCENT / 100, 2)
-    platform_fee = round(amount * PLATFORM_FEE_PERCENT / 100, 2)
-    total_fee    = round(transak_fee + paystack_fee + platform_fee, 2)
+    # Fee breakdown — MoonPay onramp replaces Transak, so only Paystack + platform
+    paystack_fee  = round(amount * PAYSTACK_FEE_PERCENT / 100, 2)
+    platform_fee  = round(amount * PLATFORM_FEE_PERCENT / 100, 2)
+    total_fee     = round(paystack_fee + platform_fee, 2)
     total_charged = round(amount + total_fee, 2)
 
     telegram_id = update.effective_user.id
-    wallet = get_wallet_address(telegram_id)
+    wallet      = get_wallet_address(telegram_id)
     moonpay_url = generate_moonpay_url(wallet)
 
     topup_id = save_pending_topup(telegram_id, naira_equivalent, currency, amount)
+
+    # Store topup_id in user_data so confirm callback can find it reliably
+    context.user_data["pending_topup_id"]     = topup_id
+    context.user_data["pending_naira_amount"] = naira_equivalent
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Open MoonPay to Pay", url=moonpay_url)],
@@ -265,7 +262,6 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💱 *Top Up Summary*\n"
         f"{'─' * 22}\n"
         f"Amount:       {symbol}{amount}\n"
-        f"Onramp fee:   {symbol}{transak_fee} ({TRANSAK_FEE_PERCENT}%)\n"
         f"Transfer fee: {symbol}{paystack_fee} ({PAYSTACK_FEE_PERCENT}%)\n"
         f"Platform fee: {symbol}{platform_fee} ({PLATFORM_FEE_PERCENT}%)\n"
         f"{'─' * 22}\n"
@@ -279,4 +275,5 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=keyboard
     )
-    return ConversationHandler.END
+    return TOPUP_AMOUNT  # Stay in TOPUP_AMOUNT state waiting for confirm/cancel button
+                                 
