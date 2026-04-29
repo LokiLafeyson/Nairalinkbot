@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler
 from helpers import (
     get_user, create_user, get_wallet_address,
     verify_pin, increment_failed_attempts, reset_failed_attempts,
@@ -10,7 +10,7 @@ from helpers import (
     TOTAL_FEE_PERCENT
 )
 from paystack import initiate_paystack_transfer
-from commands import get_main_menu
+from commands import get_main_menu, CURRENCY_SYMBOLS
 
 # ─── Conversation States ──────────────────────────────────────────────────────
 SET_PIN        = 1
@@ -110,6 +110,7 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Send Flow ────────────────────────────────────────────────────────────────
 
 async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()  # Clear any leftover state from previous flow
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
         await update.message.reply_text(
@@ -139,10 +140,7 @@ async def verify_pin_for_send(update: Update, context: ContextTypes.DEFAULT_TYPE
         if remaining <= 0:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=(
-                    "🔒 Account locked after 3 failed PIN attempts.\n\n"
-                    "Please contact support to unlock your account."
-                )
+                text="🔒 Account locked after 3 failed PIN attempts.\n\nPlease contact support."
             )
         else:
             await context.bot.send_message(
@@ -250,21 +248,25 @@ async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SEND_CONFIRM
 
 
-async def confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Typed YES/NO fallback — inline buttons are preferred."""
-    response = update.message.text.strip().upper()
-    if response == "NO":
-        await update.message.reply_text("❌ Transfer cancelled.", reply_markup=get_main_menu())
-        return ConversationHandler.END
-    if response != "YES":
-        await update.message.reply_text("Please tap Confirm & Send or Cancel above.")
-        return SEND_CONFIRM
-    await execute_send(update, context, update.message.reply_text)
+# ─── Send confirm via inline button — INSIDE ConversationHandler ──────────────
+
+async def send_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_reply_markup(reply_markup=None)
+    await _execute_send(update, context, query.message.reply_text)
     return ConversationHandler.END
 
 
-async def execute_send(update, context, reply_func):
-    """Shared send execution used by both button and text confirm."""
+async def send_confirm_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("❌ Transfer cancelled.")
+    await query.message.reply_text("What would you like to do?", reply_markup=get_main_menu())
+    return ConversationHandler.END
+
+
+async def _execute_send(update, context, reply_func):
     naira_amount   = context.user_data["naira_amount"]
     recipient      = context.user_data["recipient_name"]
     bank           = context.user_data["recipient_bank"]
@@ -326,33 +328,83 @@ async def execute_send(update, context, reply_func):
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     await update.message.reply_text("❌ Cancelled.", reply_markup=get_main_menu())
     return ConversationHandler.END
 
 
-# ─── Callback Handler ─────────────────────────────────────────────────────────
+# ─── Topup confirm/cancel — INSIDE ConversationHandler ───────────────────────
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def topup_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # Must be first — clears loading state and prevents double-tap
+    await query.answer()
     data    = query.data
     user_id = update.effective_user.id
 
-    # ── Main menu ──
+    parts = data.split("_")
+    if len(parts) != 5:
+        await query.edit_message_text("⚠️ Something went wrong.\n\nUse /topup to start again.")
+        return ConversationHandler.END
+
+    topup_id     = int(parts[2])
+    owner_id     = int(parts[3])
+    naira_amount = int(parts[4])
+
+    if user_id != owner_id:
+        await query.answer("⛔ This top-up belongs to another account.", show_alert=True)
+        return ConversationHandler.END
+
+    pending = get_pending_topup(topup_id)
+    if not pending:
+        await query.edit_message_text(
+            "⚠️ This top-up has already been processed.\n\nUse /topup to start a new one."
+        )
+        return ConversationHandler.END
+
+    update_user_balance(owner_id, naira_amount, "add")
+    delete_pending_topup(topup_id)
+    new_bal = get_user_balance(owner_id)
+
+    await query.edit_message_text(
+        f"✅ *Top Up Successful!*\n\n"
+        f"₦{naira_amount:,} added to your wallet.\n"
+        f"New balance: ₦{new_bal:,}\n\n"
+        f"Use /send to transfer money.",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+async def topup_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split("_")
+    if len(parts) == 3:
+        delete_pending_topup(int(parts[2]))
+    await query.edit_message_text("❌ Top-up cancelled.\n\nUse /topup whenever you're ready.")
+    return ConversationHandler.END
+
+
+# ─── General button callback — main menu only ─────────────────────────────────
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data    = query.data
+    user_id = update.effective_user.id
+
     if data == "menu_send":
         await query.message.reply_text("💸 Use /send to start a transfer.")
-        return
 
-    if data == "menu_receive":
+    elif data == "menu_receive":
         wallet = get_wallet_address(user_id)
         await query.message.reply_text(
             f"📥 *Your Solana Wallet:*\n\n`{wallet}`\n\n"
             f"Share this address to receive USDC (Solana network).",
             parse_mode="Markdown"
         )
-        return
 
-    if data == "menu_balance":
+    elif data == "menu_balance":
         bal    = get_user_balance(user_id)
         wallet = get_wallet_address(user_id)
         usdc   = get_usdc_balance(wallet) if wallet else 0.0
@@ -360,91 +412,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 *Your Balance*\n\n🇳🇬 Naira: ₦{bal:,}\n💎 USDC: ${usdc:.2f}",
             parse_mode="Markdown"
         )
-        return
 
-    if data == "menu_wallet":
+    elif data == "menu_wallet":
         wallet = get_wallet_address(user_id)
-        await query.message.reply_text(f"👛 *Your Wallet:*\n\n`{wallet}`", parse_mode="Markdown")
-        return
+        await query.message.reply_text(
+            f"👛 *Your Wallet:*\n\n`{wallet}`", parse_mode="Markdown"
+        )
 
-    if data == "menu_history":
+    elif data == "menu_history":
         await query.message.reply_text("📋 Use /history to view your transactions.")
-        return
 
-    if data == "menu_topup":
+    elif data == "menu_topup":
         await query.message.reply_text("➕ Use /topup to fund your wallet.")
-        return
 
-    if data == "menu_help":
+    elif data == "menu_help":
         await query.message.reply_text("📖 Use /help to learn how NairaLink works.")
-        return
-
-    # ── Send confirm ──
-    if data == "send_confirm_yes":
-        await query.edit_message_reply_markup(reply_markup=None)
-        await execute_send(update, context, query.message.reply_text)
-        return
-
-    if data == "send_confirm_no":
-        await query.edit_message_text("❌ Transfer cancelled.")
-        await query.message.reply_text("What would you like to do?", reply_markup=get_main_menu())
-        return
-
-    # ── Topup currency inline button ──
-    if data.startswith("topup_cur_"):
-        from commands import CURRENCY_SYMBOLS
-        currency = data.replace("topup_cur_", "")
-        context.user_data["topup_currency"] = currency
-        symbol = CURRENCY_SYMBOLS.get(currency, "")
-        await query.edit_message_text(
-            f"💱 Currency: *{currency}*\n\n"
-            f"How much {currency} would you like to top up?\n"
-            f"Minimum: {symbol}5\n\n"
-            f"Type the amount (numbers only):",
-            parse_mode="Markdown"
-        )
-        return
-
-    # ── Topup confirm ──
-    if data.startswith("topup_confirm_"):
-        parts = data.split("_")
-        if len(parts) != 5:
-            await query.edit_message_text("⚠️ Something went wrong.\n\nUse /topup to start again.")
-            return
-
-        topup_id     = int(parts[2])
-        owner_id     = int(parts[3])
-        naira_amount = int(parts[4])
-
-        if user_id != owner_id:
-            await query.answer("⛔ This top-up belongs to another account.", show_alert=True)
-            return
-
-        pending = get_pending_topup(topup_id)
-        if not pending:
-            await query.edit_message_text(
-                "⚠️ This top-up has already been processed.\n\nUse /topup to start a new one."
-            )
-            return
-
-        update_user_balance(owner_id, naira_amount, "add")
-        delete_pending_topup(topup_id)
-        new_bal = get_user_balance(owner_id)
-
-        await query.edit_message_text(
-            f"✅ *Top Up Successful!*\n\n"
-            f"₦{naira_amount:,} added to your wallet.\n"
-            f"New balance: ₦{new_bal:,}\n\n"
-            f"Use /send to transfer money.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # ── Topup cancel ──
-    if data.startswith("topup_cancel_"):
-        parts = data.split("_")
-        if len(parts) == 3:
-            delete_pending_topup(int(parts[2]))
-        await query.edit_message_text("❌ Top-up cancelled.\n\nUse /topup whenever you're ready.")
-        return
-        
