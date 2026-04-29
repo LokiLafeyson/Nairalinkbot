@@ -21,10 +21,10 @@ USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 # All fees as percentages (e.g. 1.5 = 1.5%)
 # Change values here — they propagate everywhere automatically
 
-TRANSAK_FEE_PERCENT   = 1.5   # Transak onramp charge
+# MoonPay handles onramp externally — we only collect Paystack + platform
 PAYSTACK_FEE_PERCENT  = 1.5   # Paystack disbursement charge
 PLATFORM_FEE_PERCENT  = 0.5   # NairaLink margin
-TOTAL_FEE_PERCENT     = TRANSAK_FEE_PERCENT + PAYSTACK_FEE_PERCENT + PLATFORM_FEE_PERCENT  # = 3.5%
+TOTAL_FEE_PERCENT     = PAYSTACK_FEE_PERCENT + PLATFORM_FEE_PERCENT  # = 2.0%
 
 # Fallback exchange rate used only when API is unavailable
 NAIRA_TO_USD = 1650
@@ -32,8 +32,16 @@ NAIRA_TO_USD = 1650
 
 # ─── Database ────────────────────────────────────────────────────────────────
 
+def _db():
+    """Open a fresh SQLite connection with WAL mode for reliable reads after writes."""
+    conn = sqlite3.connect("nairalink.db", check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
 def init_db():
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -94,7 +102,7 @@ def hash_pin(pin: str) -> str:
 
 
 def verify_pin(telegram_id: int, pin: str) -> bool:
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute("SELECT pin_hash FROM users WHERE telegram_id = ?", (telegram_id,))
     result = cursor.fetchone()
@@ -103,7 +111,7 @@ def verify_pin(telegram_id: int, pin: str) -> bool:
 
 
 def increment_failed_attempts(telegram_id: int):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE telegram_id = ?",
@@ -114,7 +122,7 @@ def increment_failed_attempts(telegram_id: int):
 
 
 def reset_failed_attempts(telegram_id: int):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE users SET failed_attempts = 0 WHERE telegram_id = ?",
@@ -125,7 +133,7 @@ def reset_failed_attempts(telegram_id: int):
 
 
 def get_failed_attempts(telegram_id: int) -> int:
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute("SELECT failed_attempts FROM users WHERE telegram_id = ?", (telegram_id,))
     result = cursor.fetchone()
@@ -136,7 +144,7 @@ def get_failed_attempts(telegram_id: int) -> int:
 # ─── User CRUD ────────────────────────────────────────────────────────────────
 
 def get_user(telegram_id: int):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
     user = cursor.fetchone()
@@ -145,7 +153,7 @@ def get_user(telegram_id: int):
 
 
 def get_user_by_wallet(wallet_address: str):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE wallet_address = ?", (wallet_address,))
     result = cursor.fetchone()
@@ -157,7 +165,7 @@ def create_user(telegram_id: int, first_name: str, pin: str) -> str:
     keypair = Keypair()
     wallet_address = str(keypair.pubkey())
     wallet_private_key = str(keypair)
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO users
@@ -171,7 +179,7 @@ def create_user(telegram_id: int, first_name: str, pin: str) -> str:
 
 
 def get_wallet_address(telegram_id: int):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute("SELECT wallet_address FROM users WHERE telegram_id = ?", (telegram_id,))
     result = cursor.fetchone()
@@ -180,7 +188,7 @@ def get_wallet_address(telegram_id: int):
 
 
 def get_user_balance(telegram_id: int) -> int:
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     c = conn.cursor()
     c.execute("SELECT naira_balance FROM users WHERE telegram_id = ?", (telegram_id,))
     row = c.fetchone()
@@ -198,7 +206,7 @@ def update_user_balance(telegram_id: int, amount: int, mode: str = "add") -> boo
         new_balance = current - amount
     else:
         return False
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     c = conn.cursor()
     c.execute(
         "UPDATE users SET naira_balance = ? WHERE telegram_id = ?",
@@ -212,7 +220,7 @@ def update_user_balance(telegram_id: int, amount: int, mode: str = "add") -> boo
 # ─── Pending Topups ───────────────────────────────────────────────────────────
 
 def save_pending_topup(telegram_id: int, naira_amount: int, currency: str, foreign_amount: float) -> int:
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO pending_topups (telegram_id, naira_amount, currency, foreign_amount)
@@ -226,7 +234,7 @@ def save_pending_topup(telegram_id: int, naira_amount: int, currency: str, forei
 
 
 def get_pending_topup(topup_id: int):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM pending_topups WHERE id = ?", (topup_id,))
     result = cursor.fetchone()
@@ -235,7 +243,7 @@ def get_pending_topup(topup_id: int):
 
 
 def delete_pending_topup(topup_id: int):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM pending_topups WHERE id = ?", (topup_id,))
     conn.commit()
@@ -258,7 +266,7 @@ def generate_transaction_id() -> str:
 def save_transaction(sender_id, recipient_name, recipient_bank,
                      recipient_account, naira_amount, usdc_amount,
                      redemption_code, transaction_id):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO transactions
@@ -273,7 +281,7 @@ def save_transaction(sender_id, recipient_name, recipient_bank,
 
 
 def get_transaction_by_code(code: str):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT * FROM transactions WHERE redemption_code = ?",
@@ -285,7 +293,7 @@ def get_transaction_by_code(code: str):
 
 
 def mark_redeemed(code: str):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE transactions SET status = 'redeemed' WHERE redemption_code = ?",
@@ -296,7 +304,7 @@ def mark_redeemed(code: str):
 
 
 def get_user_transactions(telegram_id: int, limit: int = 5):
-    conn = sqlite3.connect("nairalink.db")
+    conn = _db()
     cursor = conn.cursor()
     cursor.execute(
         """SELECT recipient_name, recipient_bank,
@@ -370,10 +378,10 @@ def calculate_send_cost(naira_amount: int, currency: str = "GBP") -> dict:
     ngn_per_foreign = rates["ngn_per_foreign"]
 
     # Fee breakdown (applied to naira amount)
-    transak_fee_naira  = round(naira_amount * TRANSAK_FEE_PERCENT / 100)
+    # MoonPay charges its own onramp fee externally — not included here
     paystack_fee_naira = round(naira_amount * PAYSTACK_FEE_PERCENT / 100)
     platform_fee_naira = round(naira_amount * PLATFORM_FEE_PERCENT / 100)
-    total_fee_naira    = transak_fee_naira + paystack_fee_naira + platform_fee_naira
+    total_fee_naira    = paystack_fee_naira + platform_fee_naira
     total_naira        = naira_amount + total_fee_naira
 
     # Foreign currency equivalents
@@ -385,7 +393,6 @@ def calculate_send_cost(naira_amount: int, currency: str = "GBP") -> dict:
 
     return {
         "naira_amount":        naira_amount,
-        "transak_fee_naira":   transak_fee_naira,
         "paystack_fee_naira":  paystack_fee_naira,
         "platform_fee_naira":  platform_fee_naira,
         "total_fee_naira":     total_fee_naira,
@@ -434,21 +441,6 @@ def get_bank_code(bank_name: str) -> str:
 
 
 # ─── Payment Links ────────────────────────────────────────────────────────────
-
-def generate_transak_link(api_key: str, amount: float, currency: str, wallet_address: str) -> str:
-    params = {
-        "apiKey": api_key,
-        "cryptoCurrencyCode": "USDC",
-        "network": "solana",
-        "walletAddress": wallet_address,
-        "fiatCurrency": currency,
-        "fiatAmount": str(amount),
-        "disableWalletAddressForm": "true",
-        "hideMenu": "true",
-        "themeColor": "00A651",
-    }
-    query = urllib.parse.urlencode(params)
-    return f"https://global-stg.transak.com?{query}"
 
 
 def generate_moonpay_url(wallet_address: str, currency_code: str = "ngn",
