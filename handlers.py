@@ -431,3 +431,4 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "menu_help":
         await query.message.reply_text("📖 Use /help to learn how NairaLink works.")
+        
