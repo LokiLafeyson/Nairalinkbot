@@ -109,7 +109,15 @@ def main():
             SET_PIN:     [MessageHandler(filters.TEXT & ~filters.COMMAND, set_pin)],
             CONFIRM_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_pin)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start",   start),
+            CommandHandler("history", history),
+            CommandHandler("balance", balance),
+            CommandHandler("send",    send),
+            CommandHandler("topup",   topup),
+        ],
+        allow_reentry=True,
     )
 
     send_handler = ConversationHandler(
@@ -125,9 +133,14 @@ def main():
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", cancel),
+            CommandHandler("cancel",  cancel),
+            CommandHandler("history", history),
+            CommandHandler("balance", balance),
+            CommandHandler("topup",   topup),
+            CommandHandler("start",   start),
             CallbackQueryHandler(send_confirm_no, pattern="^send_confirm_no$"),
-        ]
+        ],
+        allow_reentry=True,
     )
 
     topup_handler = ConversationHandler(
@@ -144,9 +157,14 @@ def main():
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", cancel),
+            CommandHandler("cancel",  cancel),
+            CommandHandler("history", history),
+            CommandHandler("balance", balance),
+            CommandHandler("send",    send),
+            CommandHandler("start",   start),
             CallbackQueryHandler(topup_cancel_callback, pattern="^topup_cancel_"),
-        ]
+        ],
+        allow_reentry=True,
     )
 
     app.add_handler(registration_handler)
