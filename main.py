@@ -109,15 +109,9 @@ def main():
             SET_PIN:     [MessageHandler(filters.TEXT & ~filters.COMMAND, set_pin)],
             CONFIRM_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_pin)],
         },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("start",   start),
-            CommandHandler("history", history),
-            CommandHandler("balance", balance),
-            CommandHandler("send",    send),
-            CommandHandler("topup",   topup),
-        ],
+        fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
+        conversation_timeout=300,
     )
 
     send_handler = ConversationHandler(
@@ -133,14 +127,11 @@ def main():
             ],
         },
         fallbacks=[
-            CommandHandler("cancel",  cancel),
-            CommandHandler("history", history),
-            CommandHandler("balance", balance),
-            CommandHandler("topup",   topup),
-            CommandHandler("start",   start),
+            CommandHandler("cancel", cancel),
             CallbackQueryHandler(send_confirm_no, pattern="^send_confirm_no$"),
         ],
         allow_reentry=True,
+        conversation_timeout=300,
     )
 
     topup_handler = ConversationHandler(
@@ -157,18 +148,16 @@ def main():
             ],
         },
         fallbacks=[
-            CommandHandler("cancel",  cancel),
-            CommandHandler("history", history),
-            CommandHandler("balance", balance),
-            CommandHandler("send",    send),
-            CommandHandler("start",   start),
+            CommandHandler("cancel", cancel),
             CallbackQueryHandler(topup_cancel_callback, pattern="^topup_cancel_"),
         ],
         allow_reentry=True,
+        conversation_timeout=300,
     )
 
-    # Register standalone commands FIRST so they are never swallowed
-    # by ConversationHandlers regardless of active state
+    app.add_handler(registration_handler)
+    app.add_handler(send_handler)
+    app.add_handler(topup_handler)
     app.add_handler(CommandHandler("balance",       balance))
     app.add_handler(CommandHandler("history",       history))
     app.add_handler(CommandHandler("help",          help_command))
@@ -178,11 +167,6 @@ def main():
     app.add_handler(CommandHandler("get_balance",   get_balance_admin))
     app.add_handler(CommandHandler("list_users",    list_users))
     app.add_handler(CommandHandler("check_balance", cmd_check_balance))
-
-    # Conversation handlers after standalone commands
-    app.add_handler(registration_handler)
-    app.add_handler(send_handler)
-    app.add_handler(topup_handler)
     app.add_handler(CallbackQueryHandler(button_callback))
 
     print("Bot polling started...", flush=True)
