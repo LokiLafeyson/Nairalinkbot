@@ -19,17 +19,17 @@ from helpers import (
 )
 from commands import (
     balance, history, wallet_command, fund,
-    help_command, reset, topup, topup_currency, topup_amount,
+    help_command, topup, topup_currency, topup_amount,
 )
 from handlers import (
     start, set_pin, confirm_pin,
-    send, verify_pin_for_send, get_amount, get_recipient,
+    send, verify_pin_for_send, get_amount,
     get_bank, get_account,
     send_confirm_yes, send_confirm_no, cancel,
     topup_confirm_callback, topup_cancel_callback,
     button_callback,
     SET_PIN, CONFIRM_PIN, VERIFY_PIN,
-    SEND_AMOUNT, SEND_RECIPIENT, SEND_BANK, SEND_ACCOUNT, SEND_CONFIRM,
+    SEND_AMOUNT, SEND_BANK, SEND_ACCOUNT, SEND_CONFIRM,
     TOPUP_CURRENCY, TOPUP_AMOUNT
 )
 from admin import add_funds, get_balance_admin, list_users, cmd_check_balance
@@ -103,7 +103,6 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Registration flow
     registration_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -113,16 +112,14 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    # Send flow — confirm buttons handled INSIDE this handler so state ends properly
     send_handler = ConversationHandler(
         entry_points=[CommandHandler("send", send)],
         states={
-            VERIFY_PIN:     [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_pin_for_send)],
-            SEND_AMOUNT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_amount)],
-            SEND_RECIPIENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_recipient)],
-            SEND_BANK:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bank)],
-            SEND_ACCOUNT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account)],
-            SEND_CONFIRM: [
+            VERIFY_PIN:  [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_pin_for_send)],
+            SEND_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_amount)],
+            SEND_BANK:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bank)],
+            SEND_ACCOUNT:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_account)],
+            SEND_CONFIRM:[
                 CallbackQueryHandler(send_confirm_yes, pattern="^send_confirm_yes$"),
                 CallbackQueryHandler(send_confirm_no,  pattern="^send_confirm_no$"),
             ],
@@ -133,7 +130,6 @@ def main():
         ]
     )
 
-    # Topup flow — confirm/cancel buttons handled INSIDE this handler
     topup_handler = ConversationHandler(
         entry_points=[CommandHandler("topup", topup)],
         states={
@@ -161,12 +157,11 @@ def main():
     app.add_handler(CommandHandler("help",          help_command))
     app.add_handler(CommandHandler("fund",          fund))
     app.add_handler(CommandHandler("wallet",        wallet_command))
-    app.add_handler(CommandHandler("reset",         reset))
     app.add_handler(CommandHandler("add_funds",     add_funds))
     app.add_handler(CommandHandler("get_balance",   get_balance_admin))
     app.add_handler(CommandHandler("list_users",    list_users))
     app.add_handler(CommandHandler("check_balance", cmd_check_balance))
-    app.add_handler(CallbackQueryHandler(button_callback))  # main menu fallback
+    app.add_handler(CallbackQueryHandler(button_callback))
 
     print("Bot polling started...", flush=True)
     app.run_polling()
