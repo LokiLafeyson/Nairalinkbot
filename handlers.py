@@ -17,7 +17,6 @@ SET_PIN        = 1
 CONFIRM_PIN    = 2
 VERIFY_PIN     = 3
 SEND_AMOUNT    = 4
-SEND_RECIPIENT = 5
 SEND_BANK      = 6
 SEND_ACCOUNT   = 7
 SEND_CONFIRM   = 8
@@ -110,7 +109,7 @@ async def confirm_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Send Flow ────────────────────────────────────────────────────────────────
 
 async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()  # Clear any leftover state from previous flow
+    context.user_data.clear()
     telegram_id = update.effective_user.id
     if not get_user(telegram_id):
         await update.message.reply_text(
@@ -172,16 +171,6 @@ async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["naira_amount"] = int(amount_text)
     await update.message.reply_text(
         f"💵 Amount: ₦{int(amount_text):,}\n\n"
-        f"👤 What's the recipient's name?\nExample: Mum"
-    )
-    return SEND_RECIPIENT
-
-
-async def get_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    recipient = update.message.text.strip().title()
-    context.user_data["recipient_name"] = recipient
-    await update.message.reply_text(
-        f"👤 Recipient: {recipient}\n\n"
         f"🏦 Which bank do they use?\n"
         f"Example: Access Bank, GTBank, Opay, Kuda"
     )
@@ -189,66 +178,80 @@ async def get_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bank = update.message.text.strip()
-    bank_code = get_bank_code(bank)
-    if bank_code == "000":
+    try:
+        bank = update.message.text.strip()
+        bank_code = get_bank_code(bank)
+        print(f"[DEBUG] Bank: '{bank}' → code: '{bank_code}'", flush=True)
+        if bank_code == "000":
+            await update.message.reply_text(
+                "⚠️ We couldn't find that bank.\n\n"
+                "Supported: Access Bank, GTBank, Zenith, First Bank, UBA, "
+                "Opay, Kuda, PalmPay, Moniepoint.\n\n"
+                "Please check the name and try again."
+            )
+            return SEND_BANK
+        context.user_data["recipient_bank"]      = bank.title()
+        context.user_data["recipient_bank_code"] = bank_code
         await update.message.reply_text(
-            "⚠️ We couldn't find that bank.\n\n"
-            "Supported: Access Bank, GTBank, Zenith, First Bank, UBA, "
-            "Opay, Kuda, PalmPay, Moniepoint.\n\n"
-            "Please check the name and try again."
+            f"🏦 Bank: {bank.title()}\n\n"
+            f"🔢 Enter the recipient's 10-digit account number:"
         )
-        return SEND_BANK
-    context.user_data["recipient_bank"] = bank.title()
-    await update.message.reply_text(
-        f"🏦 Bank: {bank.title()}\n\n"
-        f"🔢 Enter their 10-digit account number:"
-    )
-    return SEND_ACCOUNT
+        return SEND_ACCOUNT
+    except Exception as e:
+        print(f"[ERROR get_bank] {e}", flush=True)
+        await update.message.reply_text(
+            "⚠️ Something went wrong. Type /send to start again."
+        )
+        return ConversationHandler.END
 
 
 async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    account = update.message.text.strip()
-    if not account.isdigit() or len(account) != 10:
+    try:
+        account = update.message.text.strip()
+        if not account.isdigit() or len(account) != 10:
+            await update.message.reply_text(
+                "⚠️ Account number must be exactly 10 digits. Please try again:"
+            )
+            return SEND_ACCOUNT
+
+        context.user_data["recipient_account"] = account
+        naira_amount = context.user_data["naira_amount"]
+        bank         = context.user_data["recipient_bank"]
+
+        fee_naira   = round(naira_amount * TOTAL_FEE_PERCENT / 100)
+        total_naira = naira_amount + fee_naira
+        context.user_data["fee_naira"]   = fee_naira
+        context.user_data["total_naira"] = total_naira
+
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Confirm & Send", callback_data="send_confirm_yes"),
+            InlineKeyboardButton("❌ Cancel",         callback_data="send_confirm_no"),
+        ]])
+
         await update.message.reply_text(
-            "⚠️ Account number must be exactly 10 digits. Please try again:"
+            f"📋 *Confirm Transfer*\n"
+            f"{'─' * 22}\n"
+            f"Bank:    {bank}\n"
+            f"Account: {account}\n"
+            f"{'─' * 22}\n"
+            f"Amount:  ₦{naira_amount:,}\n"
+            f"Fee ({TOTAL_FEE_PERCENT}%): ₦{fee_naira:,}\n"
+            f"Total:   ₦{total_naira:,}\n"
+            f"{'─' * 22}\n\n"
+            f"Tap *Confirm & Send* to proceed:",
+            parse_mode="Markdown",
+            reply_markup=keyboard
         )
-        return SEND_ACCOUNT
-
-    context.user_data["recipient_account"] = account
-    naira_amount = context.user_data["naira_amount"]
-    recipient    = context.user_data["recipient_name"]
-    bank         = context.user_data["recipient_bank"]
-
-    fee_naira   = round(naira_amount * TOTAL_FEE_PERCENT / 100)
-    total_naira = naira_amount + fee_naira
-    context.user_data["fee_naira"]   = fee_naira
-    context.user_data["total_naira"] = total_naira
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Confirm & Send", callback_data="send_confirm_yes"),
-        InlineKeyboardButton("❌ Cancel",         callback_data="send_confirm_no"),
-    ]])
-
-    await update.message.reply_text(
-        f"📋 *Confirm Transfer*\n"
-        f"{'─' * 22}\n"
-        f"To:      {recipient}\n"
-        f"Bank:    {bank}\n"
-        f"Account: {account}\n"
-        f"{'─' * 22}\n"
-        f"Amount:  ₦{naira_amount:,}\n"
-        f"Fee ({TOTAL_FEE_PERCENT}%): ₦{fee_naira:,}\n"
-        f"Total:   ₦{total_naira:,}\n"
-        f"{'─' * 22}\n\n"
-        f"Tap *Confirm & Send* to proceed:",
-        parse_mode="Markdown",
-        reply_markup=keyboard
-    )
-    return SEND_CONFIRM
+        return SEND_CONFIRM
+    except Exception as e:
+        print(f"[ERROR get_account] {e}", flush=True)
+        await update.message.reply_text(
+            "⚠️ Something went wrong. Type /send to start again."
+        )
+        return ConversationHandler.END
 
 
-# ─── Send confirm via inline button — INSIDE ConversationHandler ──────────────
+# ─── Send confirm via inline button ──────────────────────────────────────────
 
 async def send_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -261,6 +264,7 @@ async def send_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_confirm_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    context.user_data.clear()
     await query.edit_message_text("❌ Transfer cancelled.")
     await query.message.reply_text("What would you like to do?", reply_markup=get_main_menu())
     return ConversationHandler.END
@@ -268,7 +272,6 @@ async def send_confirm_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _execute_send(update, context, reply_func):
     naira_amount   = context.user_data["naira_amount"]
-    recipient      = context.user_data["recipient_name"]
     bank           = context.user_data["recipient_bank"]
     account        = context.user_data["recipient_account"]
     usdc_amount    = round(naira_amount / NAIRA_TO_USD, 2)
@@ -288,22 +291,22 @@ async def _execute_send(update, context, reply_func):
         return
 
     await reply_func("⏳ Processing your transfer...")
-    result = initiate_paystack_transfer(recipient, bank, account, naira_amount)
+    result = initiate_paystack_transfer("Recipient", bank, account, naira_amount)
 
     if result["status"] == "success":
         save_transaction(
-            sender_id, recipient, bank, account,
+            sender_id, "Recipient", bank, account,
             naira_amount, usdc_amount,
             result["reference"], transaction_id
         )
         update_user_balance(sender_id, naira_amount, "deduct")
         await reply_func(
             f"✅ *Transfer Successful!*\n\n"
-            f"₦{naira_amount:,} sent to *{recipient}*\n\n"
+            f"₦{naira_amount:,} sent\n\n"
             f"Bank:    {bank}\n"
             f"Account: {account}\n\n"
             f"Ref: `{result['reference']}`\n\n"
-            f"💡 {recipient} will receive a bank alert shortly.",
+            f"💡 Recipient will receive a bank alert shortly.",
             parse_mode="Markdown",
             reply_markup=get_main_menu()
         )
@@ -312,7 +315,7 @@ async def _execute_send(update, context, reply_func):
         if "insufficient" in error_msg:
             friendly = "Your NairaLink balance is too low. Use /topup to add funds."
         elif "account" in error_msg or "invalid" in error_msg:
-            friendly = "The recipient's account couldn't be verified. Check the details and try again."
+            friendly = "The account number couldn't be verified. Check the details and try again."
         elif "bank" in error_msg:
             friendly = "The recipient's bank is temporarily unavailable. Try again in a few minutes."
         elif "timeout" in error_msg or "network" in error_msg:
@@ -333,7 +336,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ─── Topup confirm/cancel — INSIDE ConversationHandler ───────────────────────
+# ─── Topup confirm/cancel ─────────────────────────────────────────────────────
 
 async def topup_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -381,6 +384,7 @@ async def topup_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TY
     parts = query.data.split("_")
     if len(parts) == 3:
         delete_pending_topup(int(parts[2]))
+    context.user_data.clear()
     await query.edit_message_text("❌ Top-up cancelled.\n\nUse /topup whenever you're ready.")
     return ConversationHandler.END
 
